@@ -1,4 +1,4 @@
-Main Entry Point: main.py
+Main Entry Point: TAMOONS_main.py
 
 Command: python main.py --target "03 44 34 +32 09 48" --source IC_348
 
