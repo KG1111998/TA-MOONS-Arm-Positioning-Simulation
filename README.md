@@ -8,3 +8,4 @@ Module 2: YSO Grouping and Collision-Free Subset Creation
 Module 3: Sky Image Retrieval & FITS-based Target Plotting
 Module 4: Robotic Arm Positioning Simulation for TA-MOONS
 
+Paper on TA-MOONS: https://www.spiedigitallibrary.org/conference-proceedings-of-spie/13096/130968S/Front-optics-design-of-TIFR-ARIES-Multi-Object-Optical-to/10.1117/12.3019724.short
