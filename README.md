@@ -9,3 +9,6 @@ The ongoing plan consists of 4 modules where:
 * Module 4: Robotic Arm Positioning Simulation for TA-MOONS
 
 Paper on TA-MOONS: https://www.spiedigitallibrary.org/conference-proceedings-of-spie/13096/130968S/Front-optics-design-of-TIFR-ARIES-Multi-Object-Optical-to/10.1117/12.3019724.short
+
+TA-MOONS Facility Poster:
+![TA-MOONS facility poster](https://github.com/user-attachments/assets/6d3fff41-3ad3-40df-a0ec-ce19d3080334)
