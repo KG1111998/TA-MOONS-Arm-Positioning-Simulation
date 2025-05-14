@@ -112,50 +112,6 @@ def run_module2(source_name):
         filtered = collision_check(sublist)
         collision_check_sublists.append(filtered)
         
-    def polar_clustering_separation(sublist, min_angle_sep=10.0, min_radial_sep=1.0):
-        if len(sublist) <= 1:
-            return [sublist]
-
-        ra_center = sublist['RA_deg'].median()
-        dec_center = sublist['DEC_deg'].median()
-        center_coord = SkyCoord(ra=ra_center * u.deg, dec=dec_center * u.deg)
-        thetas = []
-        radii = []
-
-        for _, row in sublist.iterrows():
-            star_coord = SkyCoord(ra=row['RA_deg'] * u.deg, dec=row['DEC_deg'] * u.deg)
-            angle = center_coord.position_angle(star_coord).deg % 360
-            distance = center_coord.separation(star_coord).arcminute
-            thetas.append(angle)
-            radii.append(distance)
-
-        sublist = sublist.copy()
-        sublist['theta_deg'] = thetas
-        sublist['radius_arcmin'] = radii
-        groups = []
-        assigned = [False] * len(sublist)
-
-        for i in range(len(sublist)):
-            if assigned[i]:
-                continue
-            current_group = [sublist.iloc[i]]
-            assigned[i] = True
-
-            for j in range(i + 1, len(sublist)):
-                if assigned[j]:
-                    continue
-                angle_diff = abs(sublist.iloc[i]['theta_deg'] - sublist.iloc[j]['theta_deg'])
-                if angle_diff > 180:
-                    angle_diff = 360 - angle_diff
-                radius_diff = abs(sublist.iloc[i]['radius_arcmin'] - sublist.iloc[j]['radius_arcmin'])
-
-                if angle_diff >= min_angle_sep or radius_diff >= min_radial_sep:
-                    current_group.append(sublist.iloc[j])
-                    assigned[j] = True
-
-            groups.append(pd.DataFrame(current_group))
-        return groups
-    
     final_sublists_after_kmeans = []
     for group in collision_check_sublists:
         if len(group) > 8:
