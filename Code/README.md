@@ -39,7 +39,7 @@ Code Logic:
 
 * Calculate angular separation using SkyCoord.separation().
 
-* Filter out stars too close or far from center (0.3–6 arcmin).
+* Filter out stars too close or far from center (< 6 arcmin).
 
 * Group by brightness (Jmag) and distance (offset_arcmin).
 
