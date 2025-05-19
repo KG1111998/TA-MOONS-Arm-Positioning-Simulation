@@ -1,6 +1,6 @@
-Main Entry Point: TAMOONS_main.py
+Main Entry Point: TAMOONS_main_updated.py
 
-Command: python TAMOONS_main.py --target "03 44 34 +32 09 48" --source IC_348
+Command: python TAMOONS_main_updated.py --target "03 44 34 +32 09 48" --source IC_348
 
 Execution Order:
 Module 1: Gaia YSO Fetch → selected_ysos.csv
