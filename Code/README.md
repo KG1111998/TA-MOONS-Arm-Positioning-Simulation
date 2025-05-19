@@ -25,7 +25,7 @@
 
 * Takes all YSOs found in Module 1 and groups them into valid batches of up to 8 per group (1 arm per target), avoiding collision.
 
-* Collision check ensures robotic arms cannot be closer than 1 arcmin to each other.
+* Collision check ensures robotic arms cannot be closer than 0.3 arcmin to each other.
 
 * Group clustering based on:
 
