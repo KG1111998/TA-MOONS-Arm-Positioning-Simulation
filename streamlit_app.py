@@ -26,39 +26,35 @@ def convert_df_to_csv(df):
     return df.to_csv(index=False).encode('utf-8')
 
 # ==============================================================================
-# MODULE 1: Fetch YSO Data (Faithful Adaptation)
+# MODULE 1: Fetch YSO Data (UPDATED to fix caching error)
 # ==============================================================================
 def run_module1(target_input, source_name):
     st.header("Module 1: Fetching YSO Data")
     log_expander = st.expander("Show Module 1 Logs")
 
-    @st.cache_data(ttl=3600) # Cache fetching for 1 hour
+    # This cached function is now "pure". It only returns data or an error string.
+    # It does NOT contain any st.error() or st.warning() calls.
+    @st.cache_data(ttl=3600)
     def fetch_ysos_with_pm(target, radius_deg=0.1):
         Vizier.ROW_LIMIT = -1
         radius = radius_deg * u.deg
         try:
             coord = SkyCoord(target, unit=(u.hourangle, u.deg))
         except Exception as e:
-            st.error(f"Invalid target coordinates format. Please use 'HH MM SS DD MM SS'. Error: {e}")
-            return None
+            return None, f"Invalid target coordinates format. Please use 'HH MM SS DD MM SS'. Error: {e}"
 
-        log_expander.text(f"Querying Vizier catalog II/360 around {coord.to_string('hmsdms')}...")
         v_yso = Vizier(columns=["Source", "RA_ICRS", "DE_ICRS", "Jmag"])
         yso_result = v_yso.query_region(coord, radius=radius, catalog="II/360")
         if not yso_result:
-            st.error("Module 1 Error: No YSOs found in the primary catalog (II/360).")
-            return None
+            return None, "Module 1 Error: No YSOs found in the primary catalog (II/360)."
         ysos_df = yso_result[0].to_pandas()
-        log_expander.text(f"Found {len(ysos_df)} YSOs. Now querying Gaia DR2 for proper motion...")
 
         source_ids = ysos_df["Source"].astype(str).tolist()
         v_gaia = Vizier(columns=["Source", "RA_ICRS", "DE_ICRS","Jmag","pmRA", "pmDE", "Epoch"])
         gaia_result = v_gaia.query_constraints(Source=source_ids, catalog="I/345/gaia2")
         if not gaia_result:
-            st.error("Module 1 Error: No Gaia DR2 matches found for the YSOs.")
-            return None
+             return None, "Module 1 Error: No Gaia DR2 matches found for the YSOs."
         gaia_df = gaia_result[0].to_pandas()
-        log_expander.text(f"Found {len(gaia_df)} matches in Gaia DR2. Merging datasets...")
 
         combined_df = ysos_df.merge(gaia_df, on="Source", suffixes=("", "_GAIA"))
         combined_df = combined_df.rename(columns={
@@ -66,17 +62,22 @@ def run_module1(target_input, source_name):
             "Jmag": "Jmag", "pmRA": "PMRA_masyr", "pmDE": "PMDEC_masyr", "Epoch": "Epoch_year"
         })
         columns_to_keep = ["GAIA_Source_ID", "RA_deg", "DEC_deg", "Jmag", "PMRA_masyr", "PMDEC_masyr", "Epoch_year"]
-        return combined_df[columns_to_keep]
+        return combined_df[columns_to_keep], "Success"
 
-    df = fetch_ysos_with_pm(target_input)
-    if df is None or df.empty:
+    # We call the pure function here
+    df, message = fetch_ysos_with_pm(target_input)
+    
+    # And THEN we handle the UI logic based on its return value
+    if df is None:
+        st.error(message)
         return None
-
-    st.success(f" Module 1 Complete: YSO data for {source_name} fetched successfully.")
+    
+    log_expander.text(f"Query successful. Found {len(df)} YSOs.")
+    st.success(f"✅ Module 1 Complete: YSO data for {source_name} fetched successfully.")
     return df
 
 # ==============================================================================
-# MODULE 2: Group Targets (UPDATED with user inputs)
+# MODULE 2: Group Targets
 # ==============================================================================
 def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
     st.header("Module 2: Grouping Targets")
@@ -160,7 +161,7 @@ def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
     return df_out
 
 # ==============================================================================
-# MODULE 3: Create Group Summary & FITS Previews (UPDATED)
+# MODULE 3: Create Group Summary & FITS Previews
 # ==============================================================================
 def run_module3(grouped_df, source_name):
     st.header("Module 3: Creating Group Summary & FITS Previews")
@@ -174,7 +175,6 @@ def run_module3(grouped_df, source_name):
         st.warning("Module 3: No groups to process.")
         return pd.DataFrame()
 
-    # --- Create subplot grid for FITS previews ---
     cols = 3
     rows = ceil(num_groups / cols)
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 5))
@@ -207,7 +207,6 @@ def run_module3(grouped_df, source_name):
                 wcs = WCS(hdu.header)
                 data = hdu.data
                 
-                # Plotting logic from original script
                 try: vmin, vmax = np.nanpercentile(data, 5), np.nanpercentile(data, 95)
                 except: vmin, vmax = np.nanmin(data), np.nanmax(data)
                 
@@ -219,7 +218,6 @@ def run_module3(grouped_df, source_name):
                     xpix, ypix = wcs.world_to_pixel(star_coord)
                     ax.plot(xpix, ypix, 'ro', markersize=3)
                 
-                # Axis setup from original script
                 x_ticks_arcmin, y_ticks_arcmin = np.linspace(-6, 6, 5), np.linspace(-6, 6, 5)
                 arcmin_per_pix_x = abs(wcs.wcs.cdelt[0]) * 60
                 arcmin_per_pix_y = abs(wcs.wcs.cdelt[1]) * 60
@@ -237,7 +235,6 @@ def run_module3(grouped_df, source_name):
                 ax.text(0.5, 0.5, f"Group {i}\nDownload Failed", ha='center', va='center', color='red')
                 ax.set_xticks([]), ax.set_yticks([])
 
-    # --- Finalize and display the plot grid ---
     for j in range(num_groups, len(axes)):
         axes[j].set_visible(False)
     
@@ -252,13 +249,11 @@ def run_module3(grouped_df, source_name):
     return summary_df
 
 # ==============================================================================
-# MODULE 4: Arm Positioning Simulation (UPDATED with subplots and clean logs)
+# MODULE 4: Arm Positioning Simulation
 # ==============================================================================
 async def run_module4(grouped_df, summary_df, source_name):
     st.header("Module 4: Simulating Robotic Arm Positions")
-    # This module now has a clean output without verbose logs.
 
-    # --- Constants and helpers identical to the original script ---
     NUM_ARMS, FOCAL_PLANE_RADIUS, ARM_RADIUS = 8, 6.0, 6.5
     THETA_STEP, OBS_EPOCH, PARKED_RADIUS, FIXED_END_RADIUS = 360/NUM_ARMS, 2025.5, 6.0, 6.5
     pickup_arm_centers = [(i * THETA_STEP, ARM_RADIUS) for i in range(NUM_ARMS)]
@@ -288,7 +283,6 @@ async def run_module4(grouped_df, summary_df, source_name):
     def polar_to_cartesian(theta_deg, r): return r * cos(radians(theta_deg)), r * sin(radians(theta_deg))
     def euclidean_distance(p1, p2): return sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
     
-    # --- Main Simulation Logic ---
     grouped_polar_targets = convert_grouped_targets_to_polar(grouped_df, summary_df)
     all_arm_positions_list = []
     num_groups = len(grouped_polar_targets)
@@ -296,7 +290,6 @@ async def run_module4(grouped_df, summary_df, source_name):
         st.warning("Module 4: No groups to process.")
         return pd.DataFrame()
 
-    # --- Create subplot grid for all group plots ---
     st.subheader("Arm Position Simulation Plots")
     cols = 3
     rows = ceil(num_groups / cols)
@@ -329,7 +322,6 @@ async def run_module4(grouped_df, summary_df, source_name):
         origin_ra_hms = origin_coord.ra.to_string(unit=u.hour, sep=':')
         origin_dec_dms = origin_coord.dec.to_string(unit=u.deg, sep=':', alwayssign=True)
 
-        # --- Plotting on the dedicated subplot (ax) ---
         ax.set_title(f"Group {group_id}: RA={origin_ra_hms} DEC={origin_dec_dms}\nMedian Jmag={median_jmag:.2f}", va='bottom', fontsize=10)
         theta_grid = np.linspace(0, 2 * np.pi, 360)
         ax.fill_between(theta_grid, 0, 3, color='skyblue', alpha=0.3, label='Inner Zone (≤3\')')
@@ -352,7 +344,6 @@ async def run_module4(grouped_df, summary_df, source_name):
         ax.tick_params(axis='x', labelsize=8)
         ax.tick_params(axis='y', labelsize=8)
 
-        # --- Storing results ---
         for arm_idx in range(NUM_ARMS):
             theta_global, r = final_positions[arm_idx]
             theta_arm_center = pickup_arm_centers[arm_idx][0]
@@ -363,7 +354,6 @@ async def run_module4(grouped_df, summary_df, source_name):
                 "Median_Jmag": median_jmag, "Within_Reach": "Yes" if r <= FOCAL_PLANE_RADIUS else "No"
             })
             
-    # --- Finalize and display the plot grid ---
     for j in range(num_groups, len(axes)):
         axes[j].set_visible(False)
     
