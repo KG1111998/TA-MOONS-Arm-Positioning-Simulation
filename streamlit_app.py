@@ -26,14 +26,16 @@ def convert_df_to_csv(df):
     return df.to_csv(index=False).encode('utf-8')
 
 # ==============================================================================
-# MODULE 1: Fetch YSO Data
+# MODULE 1: Fetch YSO Data (UPDATED to fix caching error)
 # ==============================================================================
 def run_module1(target_input, source_name):
     st.header("Module 1: Fetching YSO Data")
     log_expander = st.expander("Show Module 1 Logs")
 
+    # This cached function is now "pure". It only returns data or an error string.
     @st.cache_data(ttl=3600)
     def fetch_ysos_with_pm(target, radius_deg=0.1):
+        # This function contains NO st.text, st.error, or other UI calls.
         Vizier.ROW_LIMIT = -1
         radius = radius_deg * u.deg
         try:
@@ -41,7 +43,6 @@ def run_module1(target_input, source_name):
         except Exception as e:
             return None, f"Invalid target coordinates format. Error: {e}"
 
-        log_expander.text(f"Querying Vizier catalog II/360 around {coord.to_string('hmsdms')}...")
         v_yso = Vizier(columns=["Source", "RA_ICRS", "DE_ICRS", "Jmag"])
         yso_result = v_yso.query_region(coord, radius=radius, catalog="II/360")
         if not yso_result:
@@ -63,6 +64,8 @@ def run_module1(target_input, source_name):
         columns_to_keep = ["GAIA_Source_ID", "RA_deg", "DEC_deg", "Jmag", "PMRA_masyr", "PMDEC_masyr", "Epoch_year"]
         return combined_df[columns_to_keep], "Success"
 
+    # UI logic is now handled OUTSIDE the cached function
+    log_expander.text(f"Querying Vizier and Gaia for target '{target_input}'...")
     df, message = fetch_ysos_with_pm(target_input)
     
     if df is None:
@@ -148,9 +151,9 @@ def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
     return df_out
 
 # ==============================================================================
-# MODULE 3: Create Group Summary & FITS Previews
+# MODULE 3: Create Group Summary & FITS Previews (UPDATED with timeout & checkbox)
 # ==============================================================================
-def run_module3(grouped_df, source_name):
+def run_module3(grouped_df, source_name, download_fits):
     st.header("Module 3: Creating Group Summary & FITS Previews")
     log_expander = st.expander("Show Module 3 Logs")
 
@@ -158,7 +161,21 @@ def run_module3(grouped_df, source_name):
     group_summaries = []
     num_groups = len(final_sublists)
     if num_groups == 0: return pd.DataFrame()
+    
+    # Generate the summary dataframe regardless of plotting
+    for i, group in enumerate(final_sublists, 1):
+        group_summaries.append({'Group': i, 'N_Targets': len(group), 'RA_center': group['RA_deg'].mean(), 'DEC_center': group['DEC_deg'].mean(), 'Median_Jmag': group['Jmag'].median()})
+    summary_df = pd.DataFrame(group_summaries)
 
+    if not download_fits:
+        st.info("ℹ️ FITS preview download was skipped by user.")
+        st.success("✅ Module 3 Complete: Group summary created.")
+        return summary_df
+
+    # --- FITS Plotting Logic ---
+    # NEW: Set a timeout for all SkyView requests to prevent hanging
+    SkyView.TIMEOUT = 20 # seconds
+    
     cols, rows = 3, ceil(num_groups / 3)
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 5))
     axes = axes.flatten()
@@ -171,17 +188,16 @@ def run_module3(grouped_df, source_name):
         mean_coord = SkyCoord(ra=ra_mean*u.deg, dec=dec_mean*u.deg)
         ra_used_hms, dec_used_dms = mean_coord.ra.to_string(unit=u.hour, sep=':'), mean_coord.dec.to_string(unit=u.deg, sep=':', alwayssign=True)
         median_jmag = group['Jmag'].median()
-        group_summaries.append({'Group': i, 'N_Targets': len(group), 'RA_center': ra_mean, 'DEC_center': dec_mean, 'Median_Jmag': median_jmag})
 
         try:
-            log_expander.text(f"Downloading 2MASS-J Group {i} image...")
+            log_expander.text(f"Requesting 2MASS-J Group {i} image from SkyView...")
             images = SkyView.get_images(position=mean_coord, survey=['2MASS-J'], radius=0.1 * u.deg, pixels=300)
             if not images:
                 log_expander.warning(f"No FITS found for Group {i}")
                 ax.text(0.5, 0.5, f"Group {i}\nImage Not Found", ha='center', va='center'); ax.set_xticks([]); ax.set_yticks([])
                 continue
             
-            hdu, wcs, data = images[0][0], WCS(images[0][0].header), images[0][0].data
+            wcs, data = WCS(images[0][0].header), images[0][0].data
             try: vmin, vmax = np.nanpercentile(data, 5), np.nanpercentile(data, 95)
             except: vmin, vmax = np.nanmin(data), np.nanmax(data)
             ax.imshow(data, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
@@ -189,7 +205,8 @@ def run_module3(grouped_df, source_name):
             for _, star in group.iterrows(): ax.plot(*wcs.world_to_pixel(SkyCoord(star['RA_deg'], star['DEC_deg'], unit='deg')), 'ro', markersize=3)
             
             x_ticks, y_ticks = np.linspace(-6, 6, 5), np.linspace(-6, 6, 5)
-            arcmin_per_pix_x, arcmin_per_pix_y = abs(wcs.wcs.cdelt[0]) * 60, abs(wcs.wcs.cdelt[1]) * 60
+            arcmin_per_pix_x = abs(wcs.wcs.cdelt[0]) * 60 if wcs.wcs.cdelt[0] != 0 else 0.1
+            arcmin_per_pix_y = abs(wcs.wcs.cdelt[1]) * 60 if wcs.wcs.cdelt[1] != 0 else 0.1
             xticks_pix, yticks_pix = center_x + x_ticks / arcmin_per_pix_x, center_y + y_ticks / arcmin_per_pix_y
             ax.set_xticks(xticks_pix, [f"{x:.1f}" for x in x_ticks]); ax.set_yticks(yticks_pix, [f"{y:.1f}" for y in y_ticks])
             ax.set_xlabel("ΔRA (arcmin)"); ax.set_ylabel("ΔDEC (arcmin)")
@@ -197,13 +214,15 @@ def run_module3(grouped_df, source_name):
             ax.grid(True, alpha=0.5)
         except Exception as e:
             log_expander.error(f"Error processing Group {i}: {e}")
-            ax.text(0.5, 0.5, f"Group {i}\nDownload Failed", ha='center', va='center', color='red'); ax.set_xticks([]); ax.set_yticks([])
+            error_msg = "Download Failed"
+            if "Timeout" in str(e): error_msg = "Download Timed Out"
+            ax.text(0.5, 0.5, f"Group {i}\n{error_msg}", ha='center', va='center', color='red'); ax.set_xticks([]); ax.set_yticks([])
 
     status_text.empty()
     for j in range(num_groups, len(axes)): axes[j].set_visible(False)
     fig.suptitle(f"FITS Previews for {source_name}", fontsize=16); plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     st.subheader("FITS Image Previews"); st.pyplot(fig); plt.close(fig)
-    summary_df = pd.DataFrame(group_summaries)
+
     st.success("✅ Module 3 Complete.")
     return summary_df
 
@@ -253,11 +272,9 @@ async def run_module4(grouped_df, summary_df, source_name):
         row_idx, col_idx = linear_sum_assignment(cost_matrix)
         
         assignments, assigned_arms = {}, set()
-        # --- THIS IS THE CORRECTED PART ---
         for arm_i, target_i in zip(row_idx, col_idx):
             assignments[arm_i] = targets[target_i]
             assigned_arms.add(arm_i)
-        # ---------------------------------
         for arm_i in range(NUM_ARMS):
             if arm_i not in assigned_arms: assignments[arm_i] = (pickup_arm_centers[arm_i][0], PARKED_RADIUS)
         final_positions = [assignments.get(i, (pickup_arm_centers[i][0], PARKED_RADIUS)) for i in range(NUM_ARMS)]
@@ -304,6 +321,9 @@ with st.sidebar:
     sep_options = [0.3, 0.6, 0.9, 1.2, 1.5, 1.8]
     min_sep_inner = st.selectbox("Inner Zone Min Separation (arcmin)", options=sep_options, index=2, help="Default: 0.9")
     min_sep_outer = st.selectbox("Outer Zone Min Separation (arcmin)", options=sep_options, index=0, help="Default: 0.3")
+    
+    st.header("FITS Preview (Module 3)")
+    download_fits = st.checkbox("Download FITS Previews", value=True, help="Uncheck to skip the slow FITS download step.")
 
     run_button = st.button("🚀 Run Full Simulation")
 
@@ -316,7 +336,7 @@ if run_button:
         if df_mod1 is not None:
             df_mod2 = run_module2(df_mod1, source_name, min_sep_inner, min_sep_outer)
             if not df_mod2.empty:
-                df_mod3 = run_module3(df_mod2, source_name)
+                df_mod3 = run_module3(df_mod2, source_name, download_fits)
                 nest_asyncio.apply()
                 df_mod4 = asyncio.run(run_module4(df_mod2, df_mod3, source_name))
 
