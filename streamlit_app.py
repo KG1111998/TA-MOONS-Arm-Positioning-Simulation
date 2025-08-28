@@ -149,15 +149,14 @@ def run_module3(grouped_df, progress_bar):
     st.success("✅ Module 3 complete: Summary created.")
     return summary_df
 
-# MODULE 4: Arm Positioning Simulation
-async def run_module4(grouped_df, summary_df, source_name, progress_bar):
-    st.text("\n🤖 Module 4: Simulating robotic arm positions...")
+# MODULE 4: Arm Positioning Simulation (UPDATED)
+def run_module4(grouped_df, summary_df, source_name, progress_bar):
+    st.text("\n🤖 Module 4: Simulating robotic arm positions for all groups...")
     
     # --- Constants and Helper functions for Module 4 ---
     NUM_ARMS = 8
     FOCAL_PLANE_RADIUS = 6.0
     ARM_RADIUS = 6.5
-    MIN_SAFE_DISTANCE = 0.3
     pickup_arm_centers = [(i * (360 / NUM_ARMS), ARM_RADIUS) for i in range(NUM_ARMS)]
     
     def polar_to_cartesian(theta_deg, r):
@@ -167,14 +166,23 @@ async def run_module4(grouped_df, summary_df, source_name, progress_bar):
     def euclidean_distance(p1, p2):
         return sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
 
-    # --- Main Simulation Logic ---
     all_arm_positions = []
-    plot_placeholder = st.empty()
-    
-    for _, group_row in summary_df.iterrows():
+    num_groups = len(summary_df)
+    if num_groups == 0:
+        st.warning("Module 4: No groups to process.")
+        return pd.DataFrame()
+
+    # --- NEW: Create a subplot grid for all group plots ---
+    st.subheader("Arm Position Simulation Plots")
+    cols = 3  # Number of plots per row
+    rows = ceil(num_groups / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 5), subplot_kw={'polar': True})
+    axes = axes.flatten() # Make the axes array 1D for easy iteration
+
+    # --- Main Simulation Loop ---
+    for i, (_, group_row) in enumerate(summary_df.iterrows()):
+        ax = axes[i]
         group_id = int(group_row['Group'])
-        st.subheader(f"Processing Group {group_id}")
-        
         origin_coord = SkyCoord(group_row['RA_center'], group_row['DEC_center'], unit="deg")
         group_targets_df = grouped_df[grouped_df['Group'] == group_id]
         
@@ -187,58 +195,67 @@ async def run_module4(grouped_df, summary_df, source_name, progress_bar):
                 polar_targets.append((pa, sep))
         
         if not polar_targets:
-            st.warning(f"Group {group_id} has no targets within the focal plane radius.")
+            ax.set_title(f"Group {group_id}\nNo valid targets", color='red')
+            ax.set_yticklabels([])
+            ax.set_xticklabels([])
             continue
 
-        # Assign targets to arms using Hungarian algorithm
         target_cartesian = [polar_to_cartesian(t, r) for t, r in polar_targets]
         arm_cartesian = [polar_to_cartesian(t, ARM_RADIUS) for t, _ in pickup_arm_centers]
         
-        cost_matrix = np.full((NUM_ARMS, len(polar_targets)), 1e6) # High cost for non-assignment
-        for i in range(NUM_ARMS):
-            for j in range(len(polar_targets)):
-                cost_matrix[i, j] = euclidean_distance(arm_cartesian[i], target_cartesian[j])
+        cost_matrix = np.full((NUM_ARMS, len(polar_targets)), 1e6)
+        for arm_idx in range(NUM_ARMS):
+            for target_idx in range(len(polar_targets)):
+                cost_matrix[arm_idx, target_idx] = euclidean_distance(arm_cartesian[arm_idx], target_cartesian[target_idx])
 
         row_idx, col_idx = linear_sum_assignment(cost_matrix)
         
-        final_positions = [(t, FOCAL_PLANE_RADIUS) for t, _ in pickup_arm_centers] # Parked
+        final_positions = [(t, FOCAL_PLANE_RADIUS) for t, _ in pickup_arm_centers]
         assigned_targets_count = 0
         for arm_i, target_i in zip(row_idx, col_idx):
-            if cost_matrix[arm_i, target_i] < 1e5: # Check if it's a valid assignment
+            if cost_matrix[arm_i, target_i] < 1e5:
                 final_positions[arm_i] = polar_targets[target_i]
                 assigned_targets_count += 1
-
-        # Store results for this group
-        for i in range(NUM_ARMS):
+        
+        for arm_idx in range(NUM_ARMS):
             all_arm_positions.append({
-                "Group": group_id, "Arm_ID": f"A{i+1}",
-                "Angle_deg": round(final_positions[i][0], 2),
-                "Radius_arcmin": round(final_positions[i][1], 2)
+                "Group": group_id, "Arm_ID": f"A{arm_idx+1}",
+                "Angle_deg": round(final_positions[arm_idx][0], 2),
+                "Radius_arcmin": round(final_positions[arm_idx][1], 2)
             })
 
-        # Plotting
-        fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={'polar': True})
-        ax.set_title(f"Source: {source_name} - Group {group_id} ({assigned_targets_count}/{len(polar_targets)} targets assigned)")
-        ax.fill_between(np.linspace(0, 2 * np.pi, 100), 0, FOCAL_PLANE_RADIUS, color='lightgray', alpha=0.3, label='Field of View (6\')')
+        # --- Plotting on the dedicated subplot (ax) ---
+        ax.set_title(f"Group {group_id} ({assigned_targets_count}/{len(polar_targets)} assigned)")
+        ax.fill_between(np.linspace(0, 2 * np.pi, 100), 0, FOCAL_PLANE_RADIUS, color='lightgray', alpha=0.3)
 
-        for i, (theta_init, r_init) in enumerate(pickup_arm_centers):
-            theta_final, r_final = final_positions[i]
+        for arm_idx, (theta_init, r_init) in enumerate(pickup_arm_centers):
+            theta_final, r_final = final_positions[arm_idx]
             is_assigned = r_final <= FOCAL_PLANE_RADIUS
             color = 'blue' if is_assigned else 'black'
             linestyle = '-' if is_assigned else '--'
-            ax.plot([radians(theta_init), radians(theta_final)], [r_init, r_final], color=color, linestyle=linestyle, marker='o', markersize=5)
-            ax.text(radians(theta_final), r_final + 0.5, f"A{i+1}", ha='center', va='center')
+            ax.plot([radians(theta_init), radians(theta_final)], [r_init, r_final], color=color, linestyle=linestyle, marker='o', markersize=4, lw=1.5)
+            ax.text(radians(theta_final), r_final + 0.8, f"A{arm_idx+1}", ha='center', va='center', fontsize=7)
         
         ax.set_rmax(ARM_RADIUS + 1)
         ax.set_theta_zero_location("N")
         ax.grid(True)
-        ax.legend()
-        plot_placeholder.pyplot(fig)
-        plt.close(fig)
+        ax.tick_params(axis='x', labelsize=8)
+        ax.tick_params(axis='y', labelsize=8)
+
+    # --- Finalize and display the plot grid ---
+    # Hide any unused subplots
+    for j in range(num_groups, len(axes)):
+        axes[j].set_visible(False)
+    
+    fig.suptitle(f"Arm Positions for {source_name}", fontsize=16, y=1.02)
+    plt.tight_layout(rect=[0, 0, 1, 0.98])
+    st.pyplot(fig)
+    plt.close(fig)
 
     progress_bar.progress(100)
-    st.success(f"✅ Module 4 complete: All {len(summary_df)} groups simulated.")
+    st.success(f"✅ Module 4 complete: All {num_groups} groups simulated and plotted.")
     return pd.DataFrame(all_arm_positions)
+
 
 # --- Streamlit UI Elements ---
 with st.sidebar:
@@ -251,7 +268,8 @@ if run_button:
     if not target_coords or not source_name:
         st.warning("Please provide both target coordinates and a source name.")
     else:
-        progress_bar = st.progress(0)
+        st.info("Simulation in progress... This may take a minute or two depending on the number of targets.")
+        progress_bar = st.progress(0, text="Starting pipeline...")
         
         # Run pipeline
         df_mod1 = run_module1(target_coords, source_name, progress_bar)
@@ -262,9 +280,8 @@ if run_button:
             if df_mod2 is not None and not df_mod2.empty:
                 df_mod3 = run_module3(df_mod2, progress_bar)
                 
-                # Use nest_asyncio to allow asyncio to run in Streamlit's environment
-                nest_asyncio.apply()
-                df_mod4 = asyncio.run(run_module4(df_mod2, df_mod3, source_name, progress_bar))
+                # The simulation is now synchronous, no asyncio needed for this part
+                df_mod4 = run_module4(df_mod2, df_mod3, source_name, progress_bar)
 
                 # --- Display Results and Download Buttons ---
                 st.header("📂 Results and Downloads")
