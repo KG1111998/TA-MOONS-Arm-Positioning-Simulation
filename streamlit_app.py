@@ -10,6 +10,9 @@ from scipy.optimize import linear_sum_assignment
 import asyncio
 import nest_asyncio
 from math import radians, cos, sin, sqrt, ceil
+from astroquery.skyview import SkyView
+from astropy.io import fits
+from astropy.wcs import WCS
 import io
 
 # --- App Configuration ---
@@ -157,20 +160,95 @@ def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
     return df_out
 
 # ==============================================================================
-# MODULE 3: Create Group Summary (Faithful Adaptation)
+# MODULE 3: Create Group Summary & FITS Previews (UPDATED)
 # ==============================================================================
 def run_module3(grouped_df, source_name):
-    st.header("Module 3: Creating Group Summary")
+    st.header("Module 3: Creating Group Summary & FITS Previews")
+    log_expander = st.expander("Show Module 3 Logs")
+
+    final_sublists = [group for _, group in grouped_df.groupby('Group')]
     group_summaries = []
-    for group_id, group_data in grouped_df.groupby('Group'):
-        group_summaries.append({
-            'Group': group_id, 'N_Targets': len(group_data),
-            'RA_center': group_data['RA_deg'].mean(), 'DEC_center': group_data['DEC_deg'].mean(),
-            'Median_Jmag': group_data['Jmag'].median()
-        })
+
+    num_groups = len(final_sublists)
+    if num_groups == 0:
+        st.warning("Module 3: No groups to process.")
+        return pd.DataFrame()
+
+    # --- Create subplot grid for FITS previews ---
+    cols = 3
+    rows = ceil(num_groups / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 5))
+    axes = axes.flatten()
+    
+    with st.spinner("Downloading and plotting FITS previews for all groups... this may take some time."):
+        for i, group in enumerate(final_sublists, 1):
+            ax = axes[i-1]
+            ra_mean, dec_mean = group['RA_deg'].mean(), group['DEC_deg'].mean()
+            mean_coord = SkyCoord(ra=ra_mean*u.deg, dec=dec_mean*u.deg)
+            ra_used_hms = mean_coord.ra.to_string(unit=u.hour, sep=':')
+            dec_used_dms = mean_coord.dec.to_string(unit=u.deg, sep=':', alwayssign=True)
+            median_jmag = group['Jmag'].median()
+
+            group_summaries.append({
+                'Group': i, 'N_Targets': len(group), 'RA_center': ra_mean,
+                'DEC_center': dec_mean, 'Median_Jmag': median_jmag
+            })
+
+            try:
+                log_expander.text(f"Downloading 2MASS-J Group {i} image...")
+                images = SkyView.get_images(position=mean_coord, survey=['2MASS-J'], radius=0.1 * u.deg)
+                if not images:
+                    log_expander.warning(f"No FITS found for Group {i}")
+                    ax.text(0.5, 0.5, f"Group {i}\nImage Not Found", ha='center', va='center')
+                    ax.set_xticks([]), ax.set_yticks([])
+                    continue
+
+                hdu = images[0][0]
+                wcs = WCS(hdu.header)
+                data = hdu.data
+                
+                # Plotting logic from original script
+                try: vmin, vmax = np.nanpercentile(data, 5), np.nanpercentile(data, 95)
+                except: vmin, vmax = np.nanmin(data), np.nanmax(data)
+                
+                ax.imshow(data, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
+                center_x, center_y = wcs.world_to_pixel(mean_coord)
+
+                for _, star in group.iterrows():
+                    star_coord = SkyCoord(star['RA_deg'], star['DEC_deg'], unit='deg')
+                    xpix, ypix = wcs.world_to_pixel(star_coord)
+                    ax.plot(xpix, ypix, 'ro', markersize=3)
+                
+                # Axis setup from original script
+                x_ticks_arcmin, y_ticks_arcmin = np.linspace(-6, 6, 5), np.linspace(-6, 6, 5)
+                arcmin_per_pix_x = abs(wcs.wcs.cdelt[0]) * 60
+                arcmin_per_pix_y = abs(wcs.wcs.cdelt[1]) * 60
+                xticks_pix = center_x + x_ticks_arcmin / arcmin_per_pix_x
+                yticks_pix = center_y + y_ticks_arcmin / arcmin_per_pix_y
+                ax.set_xticks(xticks_pix, [f"{x:.1f}" for x in x_ticks_arcmin])
+                ax.set_yticks(yticks_pix, [f"{y:.1f}" for y in y_ticks_arcmin])
+                ax.set_xlabel("ΔRA (arcmin)")
+                ax.set_ylabel("ΔDEC (arcmin)")
+                ax.set_title(f"Group {i} RA={ra_used_hms}\nDEC={dec_used_dms}, Jmag={median_jmag:.2f}", fontsize=9)
+                ax.grid(True, alpha=0.5)
+
+            except Exception as e:
+                log_expander.error(f"Error processing Group {i}: {e}")
+                ax.text(0.5, 0.5, f"Group {i}\nDownload Failed", ha='center', va='center', color='red')
+                ax.set_xticks([]), ax.set_yticks([])
+
+    # --- Finalize and display the plot grid ---
+    for j in range(num_groups, len(axes)):
+        axes[j].set_visible(False)
+    
+    fig.suptitle(f"FITS Previews for {source_name}", fontsize=16)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    st.subheader("FITS Image Previews")
+    st.pyplot(fig)
+    plt.close(fig)
+
     summary_df = pd.DataFrame(group_summaries)
-    st.info("ℹ️ The original script's FITS image download and preview plotting (Module 3) remains disabled.")
-    st.success("✅ Module 3 Complete: Group summary created.")
+    st.success("✅ Module 3 Complete: Group summary and FITS previews created.")
     return summary_df
 
 # ==============================================================================
@@ -178,6 +256,7 @@ def run_module3(grouped_df, source_name):
 # ==============================================================================
 async def run_module4(grouped_df, summary_df, source_name):
     st.header("Module 4: Simulating Robotic Arm Positions")
+    # This module now has a clean output without verbose logs.
 
     # --- Constants and helpers identical to the original script ---
     NUM_ARMS, FOCAL_PLANE_RADIUS, ARM_RADIUS = 8, 6.0, 6.5
@@ -217,7 +296,7 @@ async def run_module4(grouped_df, summary_df, source_name):
         st.warning("Module 4: No groups to process.")
         return pd.DataFrame()
 
-    # --- NEW: Create a subplot grid for all group plots ---
+    # --- Create subplot grid for all group plots ---
     st.subheader("Arm Position Simulation Plots")
     cols = 3
     rows = ceil(num_groups / cols)
@@ -273,7 +352,7 @@ async def run_module4(grouped_df, summary_df, source_name):
         ax.tick_params(axis='x', labelsize=8)
         ax.tick_params(axis='y', labelsize=8)
 
-        # --- Storing results (same as original script) ---
+        # --- Storing results ---
         for arm_idx in range(NUM_ARMS):
             theta_global, r = final_positions[arm_idx]
             theta_arm_center = pickup_arm_centers[arm_idx][0]
@@ -304,8 +383,8 @@ with st.sidebar:
     
     st.header("Grouping Parameters (Module 2)")
     sep_options = [0.3, 0.6, 0.9, 1.2, 1.5, 1.8]
-    min_sep_inner = st.selectbox("Inner Zone Min Separation (arcmin)", options=sep_options, index=2) # Default 0.9
-    min_sep_outer = st.selectbox("Outer Zone Min Separation (arcmin)", options=sep_options, index=0) # Default 0.3
+    min_sep_inner = st.selectbox("Inner Zone Min Separation (arcmin)", options=sep_options, index=2, help="Default: 0.9")
+    min_sep_outer = st.selectbox("Outer Zone Min Separation (arcmin)", options=sep_options, index=0, help="Default: 0.3")
 
     run_button = st.button("🚀 Run Full Simulation")
 
