@@ -81,8 +81,7 @@ def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
     log_expander = st.expander("Show Module 2 Logs")
 
     ysos_df["coord"] = [SkyCoord(ra, dec, unit="deg") for ra, dec in zip(ysos_df["RA_deg"], ysos_df["DEC_deg"])]
-    ra_center_deg = ysos_df["RA_deg"].median()
-    dec_center_deg = ysos_df["DEC_deg"].median()
+    ra_center_deg, dec_center_deg = ysos_df["RA_deg"].median(), ysos_df["DEC_deg"].median()
     coord_center = SkyCoord(ra=ra_center_deg * u.deg, dec=dec_center_deg * u.deg)
     ysos_df["offset_arcmin"] = [c.separation(coord_center).arcminute for c in ysos_df["coord"]]
     
@@ -90,7 +89,6 @@ def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
     outer_df = ysos_df[(ysos_df["offset_arcmin"] > 2.4) & (ysos_df["offset_arcmin"] <= 6)].copy()
 
     def process_zone(df_zone, min_sep):
-        # This function preserves the original script's logic
         if df_zone.empty: return []
         df_zone["Jmag_bin"] = df_zone["Jmag"].apply(lambda x: round(x))
         initial_sublists = []
@@ -150,7 +148,7 @@ def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
     return df_out
 
 # ==============================================================================
-# MODULE 3: Create Group Summary & FITS Previews (UPDATED with faster download)
+# MODULE 3: Create Group Summary & FITS Previews
 # ==============================================================================
 def run_module3(grouped_df, source_name):
     st.header("Module 3: Creating Group Summary & FITS Previews")
@@ -177,7 +175,6 @@ def run_module3(grouped_df, source_name):
 
         try:
             log_expander.text(f"Downloading 2MASS-J Group {i} image...")
-            # --- SPEEDUP FIX: Request a smaller 300x300 pixel image for a faster preview ---
             images = SkyView.get_images(position=mean_coord, survey=['2MASS-J'], radius=0.1 * u.deg, pixels=300)
             if not images:
                 log_expander.warning(f"No FITS found for Group {i}")
@@ -256,7 +253,11 @@ async def run_module4(grouped_df, summary_df, source_name):
         row_idx, col_idx = linear_sum_assignment(cost_matrix)
         
         assignments, assigned_arms = {}, set()
-        for arm_i, target_i in zip(row_idx, col_idx): assignments[arm_i], assigned_arms.add(arm_i) = targets[target_i], True
+        # --- THIS IS THE CORRECTED PART ---
+        for arm_i, target_i in zip(row_idx, col_idx):
+            assignments[arm_i] = targets[target_i]
+            assigned_arms.add(arm_i)
+        # ---------------------------------
         for arm_i in range(NUM_ARMS):
             if arm_i not in assigned_arms: assignments[arm_i] = (pickup_arm_centers[arm_i][0], PARKED_RADIUS)
         final_positions = [assignments.get(i, (pickup_arm_centers[i][0], PARKED_RADIUS)) for i in range(NUM_ARMS)]
