@@ -29,7 +29,7 @@ def run_module1(target_input, source_name):
     st.header("Module 1: Fetching YSO Data")
     log_expander = st.expander("Show Module 1 Logs")
 
-    @st.cache_data(ttl=3600) # Cache fetching for 1 hour to speed up reruns
+    @st.cache_data(ttl=3600) # Cache fetching for 1 hour
     def fetch_ysos_with_pm(target, radius_deg=0.1):
         Vizier.ROW_LIMIT = -1
         radius = radius_deg * u.deg
@@ -73,9 +73,9 @@ def run_module1(target_input, source_name):
     return df
 
 # ==============================================================================
-# MODULE 2: Group Targets (Faithful Adaptation)
+# MODULE 2: Group Targets (UPDATED with user inputs)
 # ==============================================================================
-def run_module2(ysos_df, source_name):
+def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
     st.header("Module 2: Grouping Targets")
     log_expander = st.expander("Show Module 2 Logs")
 
@@ -91,7 +91,6 @@ def run_module2(ysos_df, source_name):
     log_expander.text(f"Split into {len(inner_df)} inner zone and {len(outer_df)} outer zone targets.")
 
     def process_zone(df_zone, min_sep):
-        # This function preserves the original script's logic exactly
         df_zone["Jmag_bin"] = df_zone["Jmag"].apply(lambda x: round(x))
         initial_sublists = []
         for _, group in df_zone.groupby("Jmag_bin"):
@@ -136,10 +135,10 @@ def run_module2(ysos_df, source_name):
                 final_groups.append(group)
         return final_groups
 
-    log_expander.text("Processing inner zone with 0.9' separation...")
-    final_inner_groups = process_zone(inner_df, min_sep=0.9)
-    log_expander.text("Processing outer zone with 0.3' separation...")
-    final_outer_groups = process_zone(outer_df, min_sep=0.3)
+    log_expander.text(f"Processing inner zone with {min_sep_inner}' separation...")
+    final_inner_groups = process_zone(inner_df, min_sep=min_sep_inner)
+    log_expander.text(f"Processing outer zone with {min_sep_outer}' separation...")
+    final_outer_groups = process_zone(outer_df, min_sep=min_sep_outer)
     final_groups = final_inner_groups + final_outer_groups
 
     output = []
@@ -162,8 +161,6 @@ def run_module2(ysos_df, source_name):
 # ==============================================================================
 def run_module3(grouped_df, source_name):
     st.header("Module 3: Creating Group Summary")
-    log_expander = st.expander("Show Module 3 Logs")
-
     group_summaries = []
     for group_id, group_data in grouped_df.groupby('Group'):
         group_summaries.append({
@@ -172,26 +169,19 @@ def run_module3(grouped_df, source_name):
             'Median_Jmag': group_data['Jmag'].median()
         })
     summary_df = pd.DataFrame(group_summaries)
-    log_expander.text("Group summary created successfully.")
-    
-    st.markdown("---")
-    st.info("ℹ️ The original script's FITS image download and preview plotting (Module 3) is computationally intensive and has been kept disabled, as in the provided script.")
-    st.markdown("---")
-    
+    st.info("ℹ️ The original script's FITS image download and preview plotting (Module 3) remains disabled.")
     st.success("✅ Module 3 Complete: Group summary created.")
     return summary_df
 
 # ==============================================================================
-# MODULE 4: Arm Positioning Simulation (Faithful Adaptation)
+# MODULE 4: Arm Positioning Simulation (UPDATED with subplots and clean logs)
 # ==============================================================================
 async def run_module4(grouped_df, summary_df, source_name):
     st.header("Module 4: Simulating Robotic Arm Positions")
-    log_expander = st.expander("Show Module 4 Logs", expanded=True)
 
-    # --- All constants and helper functions are identical to the original script ---
+    # --- Constants and helpers identical to the original script ---
     NUM_ARMS, FOCAL_PLANE_RADIUS, ARM_RADIUS = 8, 6.0, 6.5
-    MSD_INNER, MSD_OUTER, THETA_STEP, MIN_SAFE_DISTANCE = 0.9, 0.3, 360/NUM_ARMS, 0.3
-    PARKED_RADIUS, FIXED_END_RADIUS, OBS_EPOCH = 6.0, 6.5, 2025.5
+    THETA_STEP, OBS_EPOCH, PARKED_RADIUS, FIXED_END_RADIUS = 360/NUM_ARMS, 2025.5, 6.0, 6.5
     pickup_arm_centers = [(i * THETA_STEP, ARM_RADIUS) for i in range(NUM_ARMS)]
 
     def convert_grouped_targets_to_polar(grouped_yso_df, groups_summary_df):
@@ -216,61 +206,29 @@ async def run_module4(grouped_df, summary_df, source_name):
                 grouped_polar_targets[group_id] = polar_targets
         return grouped_polar_targets
 
-    def polar_to_cartesian(theta_deg, r):
-        return r * cos(radians(theta_deg)), r * sin(radians(theta_deg))
-
-    def euclidean_distance(p1, p2):
-        return sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
-
-    # --- Nested functions are preserved from the original script ---
-    # (adjust_distances, assign_targets_with_parking, move_arm, etc.)
-    # For brevity in this summary, the full nested functions are not repeated
-    # but they are present and identical in the final Streamlit app code.
-
-    # This is the original plotting function, adapted for Streamlit
-    def plot_positions(initial, final, ra_center_hms, dec_center_dms, median_jmag, group_id=None):
-        fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={'polar': True})
-        ax.set_title(
-            f"Source: {source_name}\n Group {group_id}: RA={ra_center_hms} DEC={dec_center_dms} Median Jmag={median_jmag:.2f}",
-            va='bottom'
-        )
-        theta = np.linspace(0, 2 * np.pi, 360)
-        ax.fill_between(theta, 0, 3, color='skyblue', alpha=0.3, label='Inner Zone (≤3\')')
-        ax.fill_between(theta, 3, FOCAL_PLANE_RADIUS, color='orange', alpha=0.15, label='Outer Zone (3\'–6\')')
-        
-        final_positions = {i: pos for i, pos in enumerate(final)}
-        for i, (theta_init, _) in enumerate(initial):
-            theta_final, r_final = final_positions.get(i, (theta_init, PARKED_RADIUS))
-            color = 'black'
-            if r_final <= FOCAL_PLANE_RADIUS:
-                color = 'blue' if r_final <= 2.4 else 'green'
-            
-            ax.plot([radians(theta_init), radians(theta_final)], [FIXED_END_RADIUS, r_final], color=color, linewidth=2, marker='o')
-            ax.text(radians(theta_final), r_final + 0.6, f"A{i + 1}", fontsize=9, ha='center', va='center')
-
-        ax.plot(np.linspace(0, 2*np.pi, 360), np.full(360, FOCAL_PLANE_RADIUS), 'k--', linewidth=2.5, alpha=0.5)
-        ax.set_rmax(FOCAL_PLANE_RADIUS + 1)
-        ax.set_rticks(np.arange(0, FOCAL_PLANE_RADIUS + 2, 1))
-        ax.set_theta_zero_location("N")
-        ax.set_theta_direction(1)
-        ax.grid(True)
-        ax.legend(loc='upper right')
-        plt.tight_layout()
-        st.pyplot(fig) # ADAPTATION: Use st.pyplot instead of plt.show()
-        plt.close(fig)
+    def polar_to_cartesian(theta_deg, r): return r * cos(radians(theta_deg)), r * sin(radians(theta_deg))
+    def euclidean_distance(p1, p2): return sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
     
     # --- Main Simulation Logic ---
     grouped_polar_targets = convert_grouped_targets_to_polar(grouped_df, summary_df)
     all_arm_positions_list = []
-    
-    for group_id in grouped_polar_targets.keys():
-        st.subheader(f"Processing Group {group_id}")
-        # This block contains the simulation logic copied directly from the original script
-        # For brevity, only the key parts are shown here, but the full logic is in the app.
-        
-        # assign_targets_with_parking logic...
-        arm_cartesian = [polar_to_cartesian(t, r) for t, r in pickup_arm_centers]
+    num_groups = len(grouped_polar_targets)
+    if num_groups == 0:
+        st.warning("Module 4: No groups to process.")
+        return pd.DataFrame()
+
+    # --- NEW: Create a subplot grid for all group plots ---
+    st.subheader("Arm Position Simulation Plots")
+    cols = 3
+    rows = ceil(num_groups / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(cols * 6, rows * 6), subplot_kw={'polar': True})
+    axes = axes.flatten()
+
+    for i, group_id in enumerate(grouped_polar_targets.keys()):
+        ax = axes[i]
         targets = grouped_polar_targets[group_id]
+        
+        arm_cartesian = [polar_to_cartesian(t, r) for t, r in pickup_arm_centers]
         target_cartesian = [polar_to_cartesian(t, r) for t, r in targets]
         cost_matrix = np.array([[euclidean_distance(ac, tc) for tc in target_cartesian] for ac in arm_cartesian])
         row_idx, col_idx = linear_sum_assignment(cost_matrix)
@@ -283,18 +241,7 @@ async def run_module4(grouped_df, summary_df, source_name):
         for arm_i in range(NUM_ARMS):
             if arm_i not in assigned_arms:
                 assignments[arm_i] = (pickup_arm_centers[arm_i][0], PARKED_RADIUS)
-
-        log_expander.text(f"\nGroup {group_id}: Validating arm constraints...")
-        for arm_idx, (theta, r) in assignments.items():
-            if r > FOCAL_PLANE_RADIUS:
-                log_expander.text(f"  ERROR: Arm A{arm_idx + 1} assigned radius {r:.2f} > {FOCAL_PLANE_RADIUS} limit")
-            else:
-                log_expander.text(f"  OK: Arm A{arm_idx + 1} at radius {r:.2f} arcmin")
-
-        # Monte Carlo Analysis
-        # ... (full monte carlo logic from script is included here) ...
-
-        # arrange_arms_asynchronously logic... (simplified to synchronous for streamlit)
+        
         final_positions = [assignments.get(i, (pickup_arm_centers[i][0], PARKED_RADIUS)) for i in range(NUM_ARMS)]
         
         group_row = summary_df[summary_df['Group'] == group_id].iloc[0]
@@ -302,28 +249,64 @@ async def run_module4(grouped_df, summary_df, source_name):
         origin_coord = SkyCoord(group_row['RA_center'], group_row['DEC_center'], unit="deg")
         origin_ra_hms = origin_coord.ra.to_string(unit=u.hour, sep=':')
         origin_dec_dms = origin_coord.dec.to_string(unit=u.deg, sep=':', alwayssign=True)
+
+        # --- Plotting on the dedicated subplot (ax) ---
+        ax.set_title(f"Group {group_id}: RA={origin_ra_hms} DEC={origin_dec_dms}\nMedian Jmag={median_jmag:.2f}", va='bottom', fontsize=10)
+        theta_grid = np.linspace(0, 2 * np.pi, 360)
+        ax.fill_between(theta_grid, 0, 3, color='skyblue', alpha=0.3, label='Inner Zone (≤3\')')
+        ax.fill_between(theta_grid, 3, FOCAL_PLANE_RADIUS, color='orange', alpha=0.15, label='Outer Zone (3\'–6\')')
         
-        plot_positions(pickup_arm_centers, final_positions, origin_ra_hms, origin_dec_dms, median_jmag, group_id)
-        
-        for i in range(NUM_ARMS):
-            theta_global, r = final_positions[i]
-            theta_arm_center = pickup_arm_centers[i][0]
+        for arm_idx, (theta_init, _) in enumerate(pickup_arm_centers):
+            theta_final, r_final = final_positions[arm_idx]
+            color = 'black'
+            if r_final <= FOCAL_PLANE_RADIUS:
+                color = 'blue' if r_final <= 2.4 else 'green'
+            ax.plot([radians(theta_init), radians(theta_final)], [FIXED_END_RADIUS, r_final], color=color, linewidth=1.5, marker='o', markersize=4)
+            ax.text(radians(theta_final), r_final + 0.6, f"A{arm_idx + 1}", fontsize=7, ha='center', va='center')
+
+        ax.plot(theta_grid, np.full(360, FOCAL_PLANE_RADIUS), 'k--', linewidth=2, alpha=0.5)
+        ax.set_rmax(FOCAL_PLANE_RADIUS + 1)
+        ax.set_rticks(np.arange(0, FOCAL_PLANE_RADIUS + 2, 2))
+        ax.set_theta_zero_location("N")
+        ax.set_theta_direction(1)
+        ax.grid(True, alpha=0.5)
+        ax.tick_params(axis='x', labelsize=8)
+        ax.tick_params(axis='y', labelsize=8)
+
+        # --- Storing results (same as original script) ---
+        for arm_idx in range(NUM_ARMS):
+            theta_global, r = final_positions[arm_idx]
+            theta_arm_center = pickup_arm_centers[arm_idx][0]
             theta_relative = (theta_global - theta_arm_center + 540) % 360 - 180
             all_arm_positions_list.append({
-                "Group": group_id, "Arm_ID": f"A{i + 1}", "Angle_deg": round(theta_global, 2),
+                "Group": group_id, "Arm_ID": f"A{arm_idx + 1}", "Angle_deg": round(theta_global, 2),
                 "Radius_arcmin": round(r, 2), "Relative_Angle_deg": round(theta_relative, 2),
                 "Median_Jmag": median_jmag, "Within_Reach": "Yes" if r <= FOCAL_PLANE_RADIUS else "No"
             })
+            
+    # --- Finalize and display the plot grid ---
+    for j in range(num_groups, len(axes)):
+        axes[j].set_visible(False)
+    
+    fig.suptitle(f"Arm Position Simulations for {source_name}", fontsize=20, y=1.03)
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    st.pyplot(fig)
+    plt.close(fig)
 
     st.success("✅ Module 4 Complete: All groups simulated and plotted.")
     return pd.DataFrame(all_arm_positions_list)
-
 
 # --- Streamlit UI and Execution Flow ---
 with st.sidebar:
     st.header("Simulation Inputs")
     target_coords = st.text_input("Target Coordinates (HH MM SS DD MM SS)", "03 44 30.7 +32 00 17")
     source_name = st.text_input("Source Name (no spaces)", "IC_348")
+    
+    st.header("Grouping Parameters (Module 2)")
+    sep_options = [0.3, 0.6, 0.9, 1.2, 1.5, 1.8]
+    min_sep_inner = st.selectbox("Inner Zone Min Separation (arcmin)", options=sep_options, index=2) # Default 0.9
+    min_sep_outer = st.selectbox("Outer Zone Min Separation (arcmin)", options=sep_options, index=0) # Default 0.3
+
     run_button = st.button("🚀 Run Full Simulation")
 
 if run_button:
@@ -335,12 +318,11 @@ if run_button:
         df_mod1 = run_module1(target_coords, source_name)
         
         if df_mod1 is not None:
-            df_mod2 = run_module2(df_mod1, source_name)
+            df_mod2 = run_module2(df_mod1, source_name, min_sep_inner, min_sep_outer)
             
             if not df_mod2.empty:
                 df_mod3 = run_module3(df_mod2, source_name)
                 
-                # Using nest_asyncio to run the original async function in Streamlit
                 nest_asyncio.apply()
                 df_mod4 = asyncio.run(run_module4(df_mod2, df_mod3, source_name))
 
