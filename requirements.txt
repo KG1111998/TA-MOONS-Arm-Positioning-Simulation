@@ -1,0 +1,8 @@
+numpy
+pandas
+matplotlib
+astroquery
+astropy
+scikit-learn
+scipy
+nest_asyncio
