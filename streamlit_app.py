@@ -72,7 +72,7 @@ def run_module1(target_input, source_name):
     if df is None or df.empty:
         return None
 
-    st.success(f"✅ Module 1 Complete: YSO data for {source_name} fetched successfully.")
+    st.success(f" Module 1 Complete: YSO data for {source_name} fetched successfully.")
     return df
 
 # ==============================================================================
