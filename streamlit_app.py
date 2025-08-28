@@ -17,7 +17,7 @@ import io
 
 # --- App Configuration ---
 st.set_page_config(layout="wide", page_title="TA-MOONS Arm Simulator")
-st.title("🛰️ TA-MOONS Robotic Arm Positioning Simulator")
+st.title(" TA-MOONS Robotic Arm Positioning Simulator")
 st.write("A direct web adaptation of the TA-MOONS pipeline. This version faithfully reproduces the logic, outputs, and plotting styles of the original script.")
 
 # --- Helper function for downloads ---
