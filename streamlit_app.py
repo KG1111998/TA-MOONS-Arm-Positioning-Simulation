@@ -26,10 +26,10 @@ This work demonstrates the integration of celestial mechanics, optical physics, 
 
 The ongoing plan consists of 4 modules where:
 
-Module 1: Target fetching & visualization (Aladin + Catalog + CSV)
-Module 2: YSO Grouping and Collision-Free Subset Creation
-Module 3: Sky Image Retrieval & FITS-based Target Plotting
-Module 4: Robotic Arm Positioning Simulation for TA-MOONS """)
+* Module 1: Target fetching & visualization (Aladin + Catalog + CSV)
+* Module 2: YSO Grouping and Collision-Free Subset Creation
+* Module 3: Sky Image Retrieval & FITS-based Target Plotting
+* Module 4: Robotic Arm Positioning Simulation for TA-MOONS """)
 
 # --- Helper function for downloads ---
 @st.cache_data
