@@ -18,13 +18,7 @@ import io
 # --- App Configuration ---
 st.set_page_config(layout="wide", page_title="TA-MOONS Arm Simulator")
 st.title(" TA-MOONS Robotic Arm Positioning Simulator")
-st.write(""" This project focuses on designing and simulating a collision-free arm positioning mechanism for the TA-MOONS front optics using methodologies. The system allows precise allocation of targets within a circular field of view based on celestial coordinates. 
-The ongoing plan consists of 4 modules where:
-
-* Module 1: Target fetching from Vizier Catalog
-* Module 2: YSO Grouping and Collision-Free Clusters Creation
-* Module 3: Sky Image Retrieval & FITS-based Target Plotting
-* Module 4: Robotic Arm Positioning Simulation for TA-MOONS """)
+st.write(""" Pre Observation Preparation for YSO Spectroscopic Survey Science Case """)
 
 # --- Helper function for downloads ---
 @st.cache_data
