@@ -10,14 +10,15 @@ from scipy.optimize import linear_sum_assignment
 import asyncio
 import nest_asyncio
 from math import radians, cos, sin, sqrt, ceil
-import requests # Import the requests library
+import requests
+from PIL import Image
 import io
 
 # --- App Configuration ---
 st.set_page_config(layout="wide", page_title="TA-MOONS Arm Simulator")
 st.title("🛰️ TA-MOONS Robotic Arm Positioning Simulator")
 st.write("""
-This project focuses on designing and simulating a collision-free arm positioning mechanism for the TA-MOONS front optics... (description continues)
+This project focuses on designing and simulating a collision-free arm positioning mechanism for the TA-MOONS front optics using methodologies inspired by the K-band Multi-object Spectrograph (KMOS) of the Very Large Telescope (VLT) and Multi-object Spectroscopic Mode (MOS) of the High-Resolution Optical Spectrograph (HROS) of the Thirty Meter Telescope (TMT). The system allows precise allocation of targets within a circular field of view based on celestial coordinates. A robust collision avoidance algorithm ensures safe operation, while Monte Carlo simulations validate the system’s reliability. This work demonstrates the integration of celestial mechanics, optical physics, and computational engineering to achieve a scalable solution for next-generation ground-based survey telescopic instruments.
 """)
 
 # --- Helper function for downloads ---
@@ -29,12 +30,12 @@ def convert_df_to_csv(df):
 # MODULE 1: Fetch YSO Data
 # ==============================================================================
 def run_module1(target_input, source_name):
+    # This function remains the same
     st.header("Module 1: Fetching YSO Data")
     log_expander = st.expander("Show Module 1 Logs")
     @st.cache_data(ttl=3600)
     def fetch_ysos_with_pm(target, radius_deg=0.1):
-        Vizier.ROW_LIMIT = -1
-        radius = radius_deg * u.deg
+        Vizier.ROW_LIMIT = -1; radius = radius_deg * u.deg
         try: coord = SkyCoord(target, unit=(u.hourangle, u.deg))
         except Exception as e: return None, f"Invalid target coordinates format. Error: {e}"
         v_yso = Vizier(columns=["Source", "RA_ICRS", "DE_ICRS", "Jmag"])
@@ -62,15 +63,14 @@ def run_module1(target_input, source_name):
 # MODULE 2: Group Targets
 # ==============================================================================
 def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
+    # This function remains the same
     st.header("Module 2: Grouping Targets")
-    log_expander = st.expander("Show Module 2 Logs")
-    # ... (omitting the full code for brevity as it's unchanged)
+    final_groups = []
     ysos_df["coord"] = [SkyCoord(ra, dec, unit="deg") for ra, dec in zip(ysos_df["RA_deg"], ysos_df["DEC_deg"])]
     ra_center_deg, dec_center_deg = ysos_df["RA_deg"].median(), ysos_df["DEC_deg"].median()
     coord_center = SkyCoord(ra=ra_center_deg * u.deg, dec=dec_center_deg * u.deg)
     ysos_df["offset_arcmin"] = [c.separation(coord_center).arcminute for c in ysos_df["coord"]]
-    inner_df = ysos_df[ysos_df["offset_arcmin"] <= 2.4].copy()
-    outer_df = ysos_df[(ysos_df["offset_arcmin"] > 2.4) & (ysos_df["offset_arcmin"] <= 6)].copy()
+    inner_df, outer_df = ysos_df[ysos_df["offset_arcmin"] <= 2.4].copy(), ysos_df[(ysos_df["offset_arcmin"] > 2.4) & (ysos_df["offset_arcmin"] <= 6)].copy()
     def process_zone(df_zone, min_sep):
         if df_zone.empty: return []
         df_zone["Jmag_bin"] = df_zone["Jmag"].apply(lambda x: round(x))
@@ -98,7 +98,7 @@ def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
             for _, group in retry_df.groupby("Jmag_bin"):
                 group = group.sort_values("offset_arcmin")
                 for i in range(0, len(group), 8):
-                    valid, _ = collision_check_acco_offset(group.iloc[i:i+8])
+                    valid, _ = collision_check_acco_offset(group.iloc[i:i+8]);
                     if not valid.empty: valid_groups.append(valid)
         final_groups = []
         for group in valid_groups:
@@ -124,86 +124,73 @@ def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
     return df_out
 
 # ==============================================================================
-# MODULE 3: Create Group Summary & Image Previews (UPDATED with Pan-STARRS)
+# MODULE 3: Create Group Summary & PNG Previews (NEW RELIABLE METHOD)
 # ==============================================================================
-def run_module3(grouped_df, source_name, download_images):
+def run_module3(grouped_df, source_name):
     st.header("Module 3: Creating Group Summary & Image Previews")
+    log_expander = st.expander("Show Module 3 Logs")
+
     final_sublists = [group for _, group in grouped_df.groupby('Group')]
     group_summaries = []
     num_groups = len(final_sublists)
     if num_groups == 0: return pd.DataFrame()
     
-    # Generate summary dataframe first
+    # Generate the summary dataframe
     for i, group in enumerate(final_sublists, 1):
         group_summaries.append({'Group': i, 'N_Targets': len(group), 'RA_center': group['RA_deg'].mean(), 'DEC_center': group['DEC_deg'].mean(), 'Median_Jmag': group['Jmag'].median()})
     summary_df = pd.DataFrame(group_summaries)
 
-    if not download_images:
-        st.info("ℹ️ Image preview download was skipped by user.")
-        st.success("✅ Module 3 Complete: Group summary created.")
-        return summary_df
-
-    st.subheader("Image Previews (from Pan-STARRS)")
+    # --- NEW PNG Plotting Logic using Aladin Lite API ---
     cols, rows = 3, ceil(num_groups / 3)
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 5))
     axes = axes.flatten()
     
+    fov_arcmin = 12.0 # Field of view for the preview image
+    
     status_text = st.empty()
     for i, group in enumerate(final_sublists, 1):
-        status_text.info(f"Downloading Pan-STARRS preview {i}/{num_groups}...")
+        status_text.info(f"Downloading and plotting PNG preview {i}/{num_groups}...")
         ax = axes[i-1]
         ra_mean, dec_mean = group['RA_deg'].mean(), group['DEC_deg'].mean()
         mean_coord = SkyCoord(ra=ra_mean*u.deg, dec=dec_mean*u.deg)
         ra_used_hms, dec_used_dms = mean_coord.ra.to_string(unit='hour', sep=':'), mean_coord.dec.to_string(unit='deg', sep=':', alwayssign=True)
         median_jmag = group['Jmag'].median()
+        
         ax.set_title(f"Group {i} RA={ra_used_hms}\nDEC={dec_used_dms}, Jmag={median_jmag:.2f}", fontsize=9)
 
-        # --- NEW: Pan-STARRS URL and plotting logic ---
-        # Image size in pixels and arcminutes
-        pixels = 240
-        fov_arcmin = 12.0
-        scale_arcsec_per_pix = (fov_arcmin * 60) / pixels
-        
-        # Construct the URL for the Pan-STARRS cutout service
-        url = (f"http://ps1images.stsci.edu/cgi-bin/ps1cutouts?ra={ra_mean}&dec={dec_mean}"
-               f"&size={pixels}&format=png&color=g")
-
         try:
-            response = requests.get(url, timeout=20)
-            response.raise_for_status() # Raise an exception for bad status codes (404, 500, etc.)
+            # Construct the API URL for Aladin Lite
+            aladin_url = f"http://aladin.u-strasbg.fr/AladinLite/api/v2/hips/get/image?hips=CDS/P/2MASS/J&ra={ra_mean}&dec={dec_mean}&fov={fov_arcmin/60}&width=500&height=500"
+            log_expander.text(f"Requesting PNG for Group {i} from Aladin...")
+            response = requests.get(aladin_url, timeout=20)
+            response.raise_for_status() # Raise an exception for bad status codes
+            
+            # Open the image from the web response
+            img = Image.open(io.BytesIO(response.content))
+            ax.imshow(img, extent=[-fov_arcmin/2, fov_arcmin/2, -fov_arcmin/2, fov_arcmin/2])
 
-            img = plt.imread(io.BytesIO(response.content))
-            ax.imshow(img)
-
-            # Overlay targets. Since it's a PNG, we approximate WCS.
-            center_pix = pixels / 2
+            # Calculate and plot star positions on the PNG
             for _, star in group.iterrows():
-                # Calculate pixel offset from the center coordinate
-                delta_ra_deg = star['RA_deg'] - ra_mean
-                delta_dec_deg = star['DEC_deg'] - dec_mean
-                
-                # Convert degree offset to pixel offset
-                # Note the cos(radians(dec_mean)) for correct RA scaling
-                x_offset_pix = -(delta_ra_deg * cos(radians(dec_mean)) * 3600) / scale_arcsec_per_pix
-                y_offset_pix = (delta_dec_deg * 3600) / scale_arcsec_per_pix
-                
-                ax.plot(center_pix + x_offset_pix, center_pix + y_offset_pix, 'o', markerfacecolor='none', markeredgecolor='red', markersize=8)
+                star_coord = SkyCoord(star['RA_deg'], star['DEC_deg'], unit='deg')
+                # Project star position onto the 2D plane of the image
+                delta_ra = (star_coord.ra.deg - mean_coord.ra.deg) * cos(radians(mean_coord.dec.deg))
+                delta_dec = star_coord.dec.deg - mean_coord.dec.deg
+                # Convert offset from degrees to arcminutes
+                offset_x_arcmin = delta_ra * 60
+                offset_y_arcmin = delta_dec * 60
+                ax.plot(offset_x_arcmin, offset_y_arcmin, 'ro', markersize=3, alpha=0.8)
 
             ax.set_xlabel("ΔRA (arcmin)"); ax.set_ylabel("ΔDEC (arcmin)")
-            tick_locs = np.linspace(0, pixels, 5)
-            tick_labels = [f"{((loc - center_pix) * scale_arcsec_per_pix / 60):.1f}" for loc in tick_locs]
-            ax.set_xticks(tick_locs, tick_labels); ax.set_yticks(tick_locs, tick_labels)
-            ax.grid(True, alpha=0.5, linestyle=':')
-
-        except requests.exceptions.RequestException as e:
-            error_msg = "Download Failed"
-            if isinstance(e, requests.exceptions.Timeout): error_msg = "Download Timed Out"
-            ax.text(0.5, 0.5, f"Group {i}\n{error_msg}", ha='center', va='center', color='red'); ax.set_xticks([]); ax.set_yticks([])
+            ax.grid(True, alpha=0.5)
+        except Exception as e:
+            log_expander.error(f"Error processing Group {i}: {e}")
+            ax.text(0.5, 0.5, f"Group {i}\nImage Download Failed", ha='center', va='center', color='red'); ax.set_xticks([]); ax.set_yticks([])
 
     status_text.empty()
     for j in range(num_groups, len(axes)): axes[j].set_visible(False)
     fig.suptitle(f"Image Previews for {source_name}", fontsize=16); plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    st.pyplot(fig); plt.close(fig)
+    st.subheader("Image Previews (from 2MASS-J)"); st.pyplot(fig); plt.close(fig)
+
     st.success("✅ Module 3 Complete.")
     return summary_df
 
@@ -211,7 +198,7 @@ def run_module3(grouped_df, source_name, download_images):
 # MODULE 4: Arm Positioning Simulation
 # ==============================================================================
 async def run_module4(grouped_df, summary_df, source_name):
-    # This function remains the same as the last correct version
+    # This function remains the same
     st.header("Module 4: Simulating Robotic Arm Positions")
     # ... (omitting the full code for brevity as it's unchanged)
     NUM_ARMS, FOCAL_PLANE_RADIUS, ARM_RADIUS = 8, 6.0, 6.5
@@ -257,8 +244,7 @@ async def run_module4(grouped_df, summary_df, source_name):
         ax, targets_raw = axes[i], grouped_polar_targets[group_id]
         targets_adjusted = adjust_distances(targets_raw)
         if not targets_adjusted:
-            ax.set_title(f"Group {group_id}\nNo valid targets after adjustment", color='red', fontsize=10)
-            ax.set_xticks([]); ax.set_yticks([])
+            ax.set_title(f"Group {group_id}\nNo valid targets after adjustment", color='red', fontsize=10); ax.set_xticks([]); ax.set_yticks([])
             continue
         arm_cartesian = [polar_to_cartesian(t, r) for t, r in pickup_arm_centers]
         target_cartesian = [polar_to_cartesian(t, r) for t, r in targets_adjusted]
@@ -266,8 +252,7 @@ async def run_module4(grouped_df, summary_df, source_name):
         row_idx, col_idx = linear_sum_assignment(cost_matrix)
         assignments, assigned_arms = {}, set()
         for arm_i, target_i in zip(row_idx, col_idx):
-            assignments[arm_i] = targets_adjusted[target_i]
-            assigned_arms.add(arm_i)
+            assignments[arm_i] = targets_adjusted[target_i]; assigned_arms.add(arm_i)
         for arm_i in range(NUM_ARMS):
             if arm_i not in assigned_arms: assignments[arm_i] = (pickup_arm_centers[arm_i][0], PARKED_RADIUS)
         final_positions = [assignments.get(i, (pickup_arm_centers[i][0], PARKED_RADIUS)) for i in range(NUM_ARMS)]
@@ -308,9 +293,6 @@ sep_options = [0.3, 0.6, 0.9, 1.2, 1.5, 1.8]
 min_sep_inner = st.sidebar.selectbox("Inner Zone Min Separation (arcmin)", options=sep_options, index=2, help="Default: 0.9")
 min_sep_outer = st.sidebar.selectbox("Outer Zone Min Separation (arcmin)", options=sep_options, index=0, help="Default: 0.3")
 
-st.sidebar.header("Image Preview (Module 3)")
-download_images = st.sidebar.checkbox("Download Image Previews", value=True, help="Uncheck to skip the image download step.")
-
 run_button = st.sidebar.button("🚀 Run Full Simulation")
 
 if run_button:
@@ -322,7 +304,7 @@ if run_button:
         if df_mod1 is not None:
             df_mod2 = run_module2(df_mod1, source_name, min_sep_inner, min_sep_outer)
             if not df_mod2.empty:
-                df_mod3 = run_module3(df_mod2, source_name, download_images)
+                df_mod3 = run_module3(df_mod2, source_name)
                 nest_asyncio.apply()
                 df_mod4 = asyncio.run(run_module4(df_mod2, df_mod3, source_name))
 
