@@ -17,8 +17,10 @@ import io
 
 # --- App Configuration ---
 st.set_page_config(layout="wide", page_title="TA-MOONS Arm Simulator")
-st.title(" TA-MOONS Robotic Arm Positioning Simulator")
-st.write(""" Pre Observation Preparation for YSO Spectroscopic Survey Science Case """)
+st.title("🛰️ TA-MOONS Robotic Arm Positioning Simulator")
+st.write("""
+This project focuses on designing and simulating a collision-free arm positioning mechanism for the TA-MOONS front optics using methodologies inspired by the K-band Multi-object Spectrograph (KMOS) of the Very Large Telescope (VLT) and Multi-object Spectroscopic Mode (MOS) of the High-Resolution Optical Spectrograph (HROS) of the Thirty Meter Telescope (TMT). The system allows precise allocation of targets within a circular field of view based on celestial coordinates. A robust collision avoidance algorithm ensures safe operation, while Monte Carlo simulations validate the system’s reliability. This work demonstrates the integration of celestial mechanics, optical physics, and computational engineering to achieve a scalable solution for next-generation ground-based survey telescopic instruments.
+""")
 
 # --- Helper function for downloads ---
 @st.cache_data
@@ -26,16 +28,14 @@ def convert_df_to_csv(df):
     return df.to_csv(index=False).encode('utf-8')
 
 # ==============================================================================
-# MODULE 1: Fetch YSO Data (UPDATED to fix caching error)
+# MODULE 1: Fetch YSO Data
 # ==============================================================================
 def run_module1(target_input, source_name):
     st.header("Module 1: Fetching YSO Data")
     log_expander = st.expander("Show Module 1 Logs")
 
-    # This cached function is now "pure". It only returns data or an error string.
     @st.cache_data(ttl=3600)
     def fetch_ysos_with_pm(target, radius_deg=0.1):
-        # This function contains NO st.text, st.error, or other UI calls.
         Vizier.ROW_LIMIT = -1
         radius = radius_deg * u.deg
         try:
@@ -64,7 +64,6 @@ def run_module1(target_input, source_name):
         columns_to_keep = ["GAIA_Source_ID", "RA_deg", "DEC_deg", "Jmag", "PMRA_masyr", "PMDEC_masyr", "Epoch_year"]
         return combined_df[columns_to_keep], "Success"
 
-    # UI logic is now handled OUTSIDE the cached function
     log_expander.text(f"Querying Vizier and Gaia for target '{target_input}'...")
     df, message = fetch_ysos_with_pm(target_input)
     
@@ -151,7 +150,7 @@ def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
     return df_out
 
 # ==============================================================================
-# MODULE 3: Create Group Summary & FITS Previews (UPDATED with timeout & checkbox)
+# MODULE 3: Create Group Summary & FITS Previews
 # ==============================================================================
 def run_module3(grouped_df, source_name, download_fits):
     st.header("Module 3: Creating Group Summary & FITS Previews")
@@ -162,7 +161,6 @@ def run_module3(grouped_df, source_name, download_fits):
     num_groups = len(final_sublists)
     if num_groups == 0: return pd.DataFrame()
     
-    # Generate the summary dataframe regardless of plotting
     for i, group in enumerate(final_sublists, 1):
         group_summaries.append({'Group': i, 'N_Targets': len(group), 'RA_center': group['RA_deg'].mean(), 'DEC_center': group['DEC_deg'].mean(), 'Median_Jmag': group['Jmag'].median()})
     summary_df = pd.DataFrame(group_summaries)
@@ -172,9 +170,7 @@ def run_module3(grouped_df, source_name, download_fits):
         st.success("✅ Module 3 Complete: Group summary created.")
         return summary_df
 
-    # --- FITS Plotting Logic ---
-    # NEW: Set a timeout for all SkyView requests to prevent hanging
-    SkyView.TIMEOUT = 20 # seconds
+    SkyView.TIMEOUT = 20
     
     cols, rows = 3, ceil(num_groups / 3)
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 5))
@@ -227,11 +223,15 @@ def run_module3(grouped_df, source_name, download_fits):
     return summary_df
 
 # ==============================================================================
-# MODULE 4: Arm Positioning Simulation
+# MODULE 4: Arm Positioning Simulation (CORRECTED to match original script)
 # ==============================================================================
 async def run_module4(grouped_df, summary_df, source_name):
     st.header("Module 4: Simulating Robotic Arm Positions")
+    log_expander = st.expander("Show Module 4 Logs")
+
+    # --- Constants and helpers identical to the original script ---
     NUM_ARMS, FOCAL_PLANE_RADIUS, ARM_RADIUS = 8, 6.0, 6.5
+    MIN_SAFE_DISTANCE = 0.3
     THETA_STEP, OBS_EPOCH, PARKED_RADIUS, FIXED_END_RADIUS = 360/NUM_ARMS, 2025.5, 6.0, 6.5
     pickup_arm_centers = [(i * THETA_STEP, ARM_RADIUS) for i in range(NUM_ARMS)]
 
@@ -255,6 +255,26 @@ async def run_module4(grouped_df, summary_df, source_name):
     def polar_to_cartesian(theta_deg, r): return r * cos(radians(theta_deg)), r * sin(radians(theta_deg))
     def euclidean_distance(p1, p2): return sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
     
+    # --- RE-IMPLEMENTED: The crucial validation function from the original script ---
+    def adjust_distances(targets):
+        valid_targets = [(theta, r) for theta, r in targets if r <= FOCAL_PLANE_RADIUS]
+        filtered_count = len(targets) - len(valid_targets)
+        if filtered_count > 0:
+            log_expander.text(f"  - Note: {filtered_count} targets filtered out (beyond {FOCAL_PLANE_RADIUS} arcmin limit).")
+
+        adjusted_targets = []
+        for i, (theta_i, r_i) in enumerate(valid_targets):
+            is_safe = True
+            for j, (theta_j, r_j) in enumerate(adjusted_targets): # Check against already validated targets
+                distance = sqrt(r_i**2 + r_j**2 - 2 * r_i * r_j * cos(radians(theta_i - theta_j)))
+                if distance < MIN_SAFE_DISTANCE:
+                    is_safe = False
+                    break
+            if is_safe:
+                adjusted_targets.append((theta_i, r_i))
+        return adjusted_targets
+
+    # --- Main Simulation Logic ---
     grouped_polar_targets = convert_grouped_targets_to_polar(grouped_df, summary_df)
     all_arm_positions_list, num_groups = [], len(grouped_polar_targets)
     if num_groups == 0: return pd.DataFrame()
@@ -265,15 +285,27 @@ async def run_module4(grouped_df, summary_df, source_name):
     axes = axes.flatten()
 
     for i, group_id in enumerate(grouped_polar_targets.keys()):
-        ax, targets = axes[i], grouped_polar_targets[group_id]
+        ax = axes[i]
+        targets_raw = grouped_polar_targets[group_id]
+        
+        # --- CORRECTED LOGIC: Use the adjust_distances function before assignment ---
+        log_expander.text(f"Processing Group {group_id}: Adjusting distances for {len(targets_raw)} raw targets...")
+        targets_adjusted = adjust_distances(targets_raw)
+        log_expander.text(f"  - {len(targets_adjusted)} targets remain after validation.")
+
+        if not targets_adjusted:
+            ax.set_title(f"Group {group_id}\nNo valid targets after adjustment", color='red', fontsize=10)
+            ax.set_xticks([]); ax.set_yticks([])
+            continue
+
         arm_cartesian = [polar_to_cartesian(t, r) for t, r in pickup_arm_centers]
-        target_cartesian = [polar_to_cartesian(t, r) for t, r in targets]
+        target_cartesian = [polar_to_cartesian(t, r) for t, r in targets_adjusted]
         cost_matrix = np.array([[euclidean_distance(ac, tc) for tc in target_cartesian] for ac in arm_cartesian])
         row_idx, col_idx = linear_sum_assignment(cost_matrix)
         
         assignments, assigned_arms = {}, set()
         for arm_i, target_i in zip(row_idx, col_idx):
-            assignments[arm_i] = targets[target_i]
+            assignments[arm_i] = targets_adjusted[target_i]
             assigned_arms.add(arm_i)
         for arm_i in range(NUM_ARMS):
             if arm_i not in assigned_arms: assignments[arm_i] = (pickup_arm_centers[arm_i][0], PARKED_RADIUS)
