@@ -17,7 +17,7 @@ import io
 
 # --- App Configuration ---
 st.set_page_config(layout="wide", page_title="TA-MOONS Arm Simulator")
-st.title("🛰️ TA-MOONS Robotic Arm Positioning Simulator")
+st.title(" TA-MOONS Robotic Arm Positioning Simulator")
 st.write(""" Pre Observation Preparation for Young Stellar Objects (YSO) Spectroscopic Survey Science Case """)
 
 # --- Helper function for downloads ---
@@ -70,7 +70,7 @@ def run_module1(target_input, source_name):
         return None
     
     log_expander.text(f"Query successful. Found {len(df)} YSOs.")
-    st.success(f"✅ Module 1 Complete: YSO data for {source_name} fetched successfully.")
+    st.success(f" Module 1 Complete: YSO data for {source_name} fetched successfully.")
     return df
 
 # ==============================================================================
@@ -144,7 +144,7 @@ def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
             ra_hms, dec_dms = coord.to_string("hmsdms").split()
             output.append({"Group": i, "GAIA_Source_ID": row["GAIA_Source_ID"], "RA_HMS": ra_hms, "DEC_DMS": dec_dms, "RA_deg": coord.ra.degree, "DEC_deg": coord.dec.degree, "Jmag": row["Jmag"], "Offset_arcmin": row["offset_arcmin"]})
     df_out = pd.DataFrame(output)
-    st.success(f"✅ Module 2 Complete: {len(final_groups)} groups formed.")
+    st.success(f" Module 2 Complete: {len(final_groups)} groups formed.")
     return df_out
 
 # ==============================================================================
@@ -164,8 +164,8 @@ def run_module3(grouped_df, source_name, download_fits):
     summary_df = pd.DataFrame(group_summaries)
 
     if not download_fits:
-        st.info("ℹ️ FITS preview download was skipped by user.")
-        st.success("✅ Module 3 Complete: Group summary created.")
+        st.info(" FITS preview download was skipped by user.")
+        st.success(" Module 3 Complete: Group summary created.")
         return summary_df
 
     SkyView.TIMEOUT = 20
@@ -217,7 +217,7 @@ def run_module3(grouped_df, source_name, download_fits):
     fig.suptitle(f"FITS Previews for {source_name}", fontsize=16); plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     st.subheader("FITS Image Previews"); st.pyplot(fig); plt.close(fig)
 
-    st.success("✅ Module 3 Complete.")
+    st.success(" Module 3 Complete.")
     return summary_df
 
 # ==============================================================================
@@ -339,7 +339,7 @@ async def run_module4(grouped_df, summary_df, source_name):
     for j in range(num_groups, len(axes)): axes[j].set_visible(False)
     fig.suptitle(f"Arm Position Simulations for {source_name}", fontsize=20, y=1.03)
     plt.tight_layout(rect=[0, 0, 1, 0.97]); st.pyplot(fig); plt.close(fig)
-    st.success("✅ Module 4 Complete."); return pd.DataFrame(all_arm_positions_list)
+    st.success(" Module 4 Complete."); return pd.DataFrame(all_arm_positions_list)
 
 # --- Streamlit UI and Execution Flow ---
 with st.sidebar:
@@ -355,7 +355,7 @@ with st.sidebar:
     st.header("FITS Preview (Module 3)")
     download_fits = st.checkbox("Download FITS Previews", value=True, help="Uncheck to skip the slow FITS download step.")
 
-    run_button = st.button("🚀 Run Full Simulation")
+    run_button = st.button(" Run Full Simulation")
 
 if run_button:
     if not target_coords or not source_name:
@@ -370,7 +370,7 @@ if run_button:
                 nest_asyncio.apply()
                 df_mod4 = asyncio.run(run_module4(df_mod2, df_mod3, source_name))
 
-                st.header("📂 Final Results and Downloads")
+                st.header(" Final Results and Downloads")
                 st.subheader("Fetched YSOs"); st.dataframe(df_mod1)
                 st.download_button("Download Selected YSOs (CSV)", convert_df_to_csv(df_mod1), f"selected_ysos_{source_name}.csv", "text/csv")
                 st.subheader("Grouped Targets"); st.dataframe(df_mod2)
