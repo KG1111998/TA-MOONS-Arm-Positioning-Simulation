@@ -10,8 +10,7 @@ from scipy.optimize import linear_sum_assignment
 import asyncio
 import nest_asyncio
 from math import radians, cos, sin, sqrt, ceil
-from astropy.io import fits
-from astropy.wcs import WCS
+import requests # Import the requests library
 import io
 
 # --- App Configuration ---
@@ -30,7 +29,6 @@ def convert_df_to_csv(df):
 # MODULE 1: Fetch YSO Data
 # ==============================================================================
 def run_module1(target_input, source_name):
-    # This function remains the same
     st.header("Module 1: Fetching YSO Data")
     log_expander = st.expander("Show Module 1 Logs")
     @st.cache_data(ttl=3600)
@@ -64,9 +62,8 @@ def run_module1(target_input, source_name):
 # MODULE 2: Group Targets
 # ==============================================================================
 def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
-    # This function remains the same
     st.header("Module 2: Grouping Targets")
-    final_groups = [] # Will be populated with group dataframes
+    log_expander = st.expander("Show Module 2 Logs")
     # ... (omitting the full code for brevity as it's unchanged)
     ysos_df["coord"] = [SkyCoord(ra, dec, unit="deg") for ra, dec in zip(ysos_df["RA_deg"], ysos_df["DEC_deg"])]
     ra_center_deg, dec_center_deg = ysos_df["RA_deg"].median(), ysos_df["DEC_deg"].median()
@@ -127,74 +124,86 @@ def run_module2(ysos_df, source_name, min_sep_inner, min_sep_outer):
     return df_out
 
 # ==============================================================================
-# MODULE 3: Create Group Summary & FITS Previews (UPDATED with manual upload)
+# MODULE 3: Create Group Summary & Image Previews (UPDATED with Pan-STARRS)
 # ==============================================================================
-def run_module3(grouped_df, source_name, uploaded_files):
-    st.header("Module 3: Creating Group Summary & FITS Previews")
+def run_module3(grouped_df, source_name, download_images):
+    st.header("Module 3: Creating Group Summary & Image Previews")
     final_sublists = [group for _, group in grouped_df.groupby('Group')]
     group_summaries = []
     num_groups = len(final_sublists)
     if num_groups == 0: return pd.DataFrame()
     
-    # Generate the summary dataframe first
+    # Generate summary dataframe first
     for i, group in enumerate(final_sublists, 1):
         group_summaries.append({'Group': i, 'N_Targets': len(group), 'RA_center': group['RA_deg'].mean(), 'DEC_center': group['DEC_deg'].mean(), 'Median_Jmag': group['Jmag'].median()})
     summary_df = pd.DataFrame(group_summaries)
 
-    if not uploaded_files:
-        st.info("ℹ️ No FITS files uploaded. Skipping preview plots.")
+    if not download_images:
+        st.info("ℹ️ Image preview download was skipped by user.")
         st.success("✅ Module 3 Complete: Group summary created.")
         return summary_df
 
-    st.subheader("FITS Image Previews")
-    if len(uploaded_files) != num_groups:
-        st.warning(f"Warning: You have {num_groups} groups but uploaded {len(uploaded_files)} FITS files. Only the first {min(num_groups, len(uploaded_files))} will be plotted.")
-
+    st.subheader("Image Previews (from Pan-STARRS)")
     cols, rows = 3, ceil(num_groups / 3)
     fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 5))
     axes = axes.flatten()
     
+    status_text = st.empty()
     for i, group in enumerate(final_sublists, 1):
+        status_text.info(f"Downloading Pan-STARRS preview {i}/{num_groups}...")
         ax = axes[i-1]
         ra_mean, dec_mean = group['RA_deg'].mean(), group['DEC_deg'].mean()
         mean_coord = SkyCoord(ra=ra_mean*u.deg, dec=dec_mean*u.deg)
         ra_used_hms, dec_used_dms = mean_coord.ra.to_string(unit='hour', sep=':'), mean_coord.dec.to_string(unit='deg', sep=':', alwayssign=True)
         median_jmag = group['Jmag'].median()
-        
         ax.set_title(f"Group {i} RA={ra_used_hms}\nDEC={dec_used_dms}, Jmag={median_jmag:.2f}", fontsize=9)
+
+        # --- NEW: Pan-STARRS URL and plotting logic ---
+        # Image size in pixels and arcminutes
+        pixels = 240
+        fov_arcmin = 12.0
+        scale_arcsec_per_pix = (fov_arcmin * 60) / pixels
         
-        if i > len(uploaded_files):
-            ax.text(0.5, 0.5, f"Group {i}\nFITS file not provided", ha='center', va='center', color='orange'); ax.set_xticks([]); ax.set_yticks([])
-            continue
+        # Construct the URL for the Pan-STARRS cutout service
+        url = (f"http://ps1images.stsci.edu/cgi-bin/ps1cutouts?ra={ra_mean}&dec={dec_mean}"
+               f"&size={pixels}&format=png&color=g")
 
         try:
-            # Read FITS data from the uploaded file object
-            with fits.open(uploaded_files[i-1]) as hdul:
-                hdu = hdul[0]
-                wcs, data = WCS(hdu.header), hdu.data
-            
-            try: vmin, vmax = np.nanpercentile(data, 5), np.nanpercentile(data, 95)
-            except: vmin, vmax = np.nanmin(data), np.nanmax(data)
-            
-            ax.imshow(data, cmap='gray', origin='lower', vmin=vmin, vmax=vmax)
-            center_x, center_y = wcs.world_to_pixel(mean_coord)
-            for _, star in group.iterrows(): ax.plot(*wcs.world_to_pixel(SkyCoord(star['RA_deg'], star['DEC_deg'], unit='deg')), 'ro', markersize=3)
-            
-            x_ticks, y_ticks = np.linspace(-6, 6, 5), np.linspace(-6, 6, 5)
-            arcmin_per_pix_x = abs(wcs.wcs.cdelt[0]) * 60 if wcs.wcs.cdelt[0] != 0 else 0.1
-            arcmin_per_pix_y = abs(wcs.wcs.cdelt[1]) * 60 if wcs.wcs.cdelt[1] != 0 else 0.1
-            xticks_pix, yticks_pix = center_x + x_ticks / arcmin_per_pix_x, center_y + y_ticks / arcmin_per_pix_y
-            ax.set_xticks(xticks_pix, [f"{x:.1f}" for x in x_ticks]); ax.set_yticks(yticks_pix, [f"{y:.1f}" for y in y_ticks])
+            response = requests.get(url, timeout=20)
+            response.raise_for_status() # Raise an exception for bad status codes (404, 500, etc.)
+
+            img = plt.imread(io.BytesIO(response.content))
+            ax.imshow(img)
+
+            # Overlay targets. Since it's a PNG, we approximate WCS.
+            center_pix = pixels / 2
+            for _, star in group.iterrows():
+                # Calculate pixel offset from the center coordinate
+                delta_ra_deg = star['RA_deg'] - ra_mean
+                delta_dec_deg = star['DEC_deg'] - dec_mean
+                
+                # Convert degree offset to pixel offset
+                # Note the cos(radians(dec_mean)) for correct RA scaling
+                x_offset_pix = -(delta_ra_deg * cos(radians(dec_mean)) * 3600) / scale_arcsec_per_pix
+                y_offset_pix = (delta_dec_deg * 3600) / scale_arcsec_per_pix
+                
+                ax.plot(center_pix + x_offset_pix, center_pix + y_offset_pix, 'o', markerfacecolor='none', markeredgecolor='red', markersize=8)
+
             ax.set_xlabel("ΔRA (arcmin)"); ax.set_ylabel("ΔDEC (arcmin)")
-            ax.grid(True, alpha=0.5)
-        except Exception as e:
-            st.error(f"Error processing FITS file for Group {i}: {e}")
-            ax.text(0.5, 0.5, f"Group {i}\nError reading file", ha='center', va='center', color='red'); ax.set_xticks([]); ax.set_yticks([])
+            tick_locs = np.linspace(0, pixels, 5)
+            tick_labels = [f"{((loc - center_pix) * scale_arcsec_per_pix / 60):.1f}" for loc in tick_locs]
+            ax.set_xticks(tick_locs, tick_labels); ax.set_yticks(tick_locs, tick_labels)
+            ax.grid(True, alpha=0.5, linestyle=':')
 
+        except requests.exceptions.RequestException as e:
+            error_msg = "Download Failed"
+            if isinstance(e, requests.exceptions.Timeout): error_msg = "Download Timed Out"
+            ax.text(0.5, 0.5, f"Group {i}\n{error_msg}", ha='center', va='center', color='red'); ax.set_xticks([]); ax.set_yticks([])
+
+    status_text.empty()
     for j in range(num_groups, len(axes)): axes[j].set_visible(False)
-    fig.suptitle(f"FITS Previews for {source_name}", fontsize=16); plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    fig.suptitle(f"Image Previews for {source_name}", fontsize=16); plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     st.pyplot(fig); plt.close(fig)
-
     st.success("✅ Module 3 Complete.")
     return summary_df
 
@@ -202,7 +211,7 @@ def run_module3(grouped_df, source_name, uploaded_files):
 # MODULE 4: Arm Positioning Simulation
 # ==============================================================================
 async def run_module4(grouped_df, summary_df, source_name):
-    # This function remains the same
+    # This function remains the same as the last correct version
     st.header("Module 4: Simulating Robotic Arm Positions")
     # ... (omitting the full code for brevity as it's unchanged)
     NUM_ARMS, FOCAL_PLANE_RADIUS, ARM_RADIUS = 8, 6.0, 6.5
@@ -299,56 +308,31 @@ sep_options = [0.3, 0.6, 0.9, 1.2, 1.5, 1.8]
 min_sep_inner = st.sidebar.selectbox("Inner Zone Min Separation (arcmin)", options=sep_options, index=2, help="Default: 0.9")
 min_sep_outer = st.sidebar.selectbox("Outer Zone Min Separation (arcmin)", options=sep_options, index=0, help="Default: 0.3")
 
-run_button = st.sidebar.button("🚀 Run Modules 1 & 2")
+st.sidebar.header("Image Preview (Module 3)")
+download_images = st.sidebar.checkbox("Download Image Previews", value=True, help="Uncheck to skip the image download step.")
 
-if run_button or 'df_mod2' in st.session_state:
+run_button = st.sidebar.button("🚀 Run Full Simulation")
+
+if run_button:
     if not target_coords or not source_name:
         st.warning("Please provide both target coordinates and a source name.")
     else:
-        if 'df_mod1' not in st.session_state:
-            with st.spinner("Running Module 1 (Fetching Data)..."):
-                st.session_state.df_mod1 = run_module1(target_coords, source_name)
-        
-        if st.session_state.df_mod1 is not None:
-            if 'df_mod2' not in st.session_state:
-                with st.spinner("Running Module 2 (Grouping Targets)..."):
-                    st.session_state.df_mod2 = run_module2(st.session_state.df_mod1, source_name, min_sep_inner, min_sep_outer)
+        st.info("Simulation in progress... This may take a minute or two.")
+        df_mod1 = run_module1(target_coords, source_name)
+        if df_mod1 is not None:
+            df_mod2 = run_module2(df_mod1, source_name, min_sep_inner, min_sep_outer)
+            if not df_mod2.empty:
+                df_mod3 = run_module3(df_mod2, source_name, download_images)
+                nest_asyncio.apply()
+                df_mod4 = asyncio.run(run_module4(df_mod2, df_mod3, source_name))
 
-            if not st.session_state.df_mod2.empty:
-                st.header("Module 3: FITS Image Upload")
-                st.markdown("---")
-
-                # Generate and display the summary table to help the user
-                groups_for_fits = [group for _, group in st.session_state.df_mod2.groupby('Group')]
-                group_summaries_for_fits = []
-                for i, group in enumerate(groups_for_fits, 1):
-                    group_summaries_for_fits.append({'Group': i, 'RA_center': group['RA_deg'].mean(), 'DEC_center': group['DEC_deg'].mean()})
-                summary_for_fits_df = pd.DataFrame(group_summaries_for_fits)
-                
-                st.info("Please use the coordinates below to manually download FITS files from the SkyView website.")
-                st.dataframe(summary_for_fits_df)
-                st.markdown("[Click here to go to NASA SkyView Query Form](https://skyview.gsfc.nasa.gov/current/cgi/query.pl)", unsafe_allow_html=True)
-                st.markdown("**Instructions:** For each group, enter the `RA_center` and `DEC_center` coordinates into SkyView, select the `2MASS-J` survey, and download the FITS file.")
-
-                uploaded_fits_files = st.file_uploader(
-                    f"Upload the {len(groups_for_fits)} FITS files for your groups. You can select multiple files at once.",
-                    type=['fits', 'fit'],
-                    accept_multiple_files=True
-                )
-
-                if uploaded_fits_files:
-                    with st.spinner("Running Modules 3 & 4..."):
-                        df_mod3 = run_module3(st.session_state.df_mod2, source_name, uploaded_fits_files)
-                        nest_asyncio.apply()
-                        df_mod4 = asyncio.run(run_module4(st.session_state.df_mod2, df_mod3, source_name))
-
-                    st.header("📂 Final Results and Downloads")
-                    st.subheader("Fetched YSOs"); st.dataframe(st.session_state.df_mod1)
-                    st.download_button("Download Selected YSOs (CSV)", convert_df_to_csv(st.session_state.df_mod1), f"selected_ysos_{source_name}.csv", "text/csv")
-                    st.subheader("Grouped Targets"); st.dataframe(st.session_state.df_mod2)
-                    st.download_button("Download Grouped YSOs (CSV)", convert_df_to_csv(st.session_state.df_mod2), f"grouped_ysos_{source_name}.csv", "text/csv")
-                    st.subheader("Group Summary"); st.dataframe(df_mod3)
-                    st.download_button("Download Group Summary (CSV)", convert_df_to_csv(df_mod3), f"group_summary_{source_name}.csv", "text/csv")
-                    if not df_mod4.empty:
-                        st.subheader("Final Arm Positions"); st.dataframe(df_mod4)
-                        st.download_button("Download Arm Positions (CSV)", convert_df_to_csv(df_mod4), f"arm_positions_{source_name}.csv", "text/csv")
+                st.header("📂 Final Results and Downloads")
+                st.subheader("Fetched YSOs"); st.dataframe(df_mod1)
+                st.download_button("Download Selected YSOs (CSV)", convert_df_to_csv(df_mod1), f"selected_ysos_{source_name}.csv", "text/csv")
+                st.subheader("Grouped Targets"); st.dataframe(df_mod2)
+                st.download_button("Download Grouped YSOs (CSV)", convert_df_to_csv(df_mod2), f"grouped_ysos_{source_name}.csv", "text/csv")
+                st.subheader("Group Summary"); st.dataframe(df_mod3)
+                st.download_button("Download Group Summary (CSV)", convert_df_to_csv(df_mod3), f"group_summary_{source_name}.csv", "text/csv")
+                if not df_mod4.empty:
+                    st.subheader("Final Arm Positions"); st.dataframe(df_mod4)
+                    st.download_button("Download Arm Positions (CSV)", convert_df_to_csv(df_mod4), f"arm_positions_{source_name}.csv", "text/csv")
