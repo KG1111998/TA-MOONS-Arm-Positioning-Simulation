@@ -6,3 +6,4 @@ astropy
 scikit-learn
 scipy
 nest_asyncio
+requests
